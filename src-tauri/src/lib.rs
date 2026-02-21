@@ -1,5 +1,4 @@
 use serde::Serialize;
-use tauri::Manager;
 
 mod audio;
 use audio::engine::AudioState;

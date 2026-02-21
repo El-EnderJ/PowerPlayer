@@ -509,4 +509,46 @@ mod tests {
         assert!(limiter.process_sample(2.0) <= 1.0);
         assert!(limiter.process_sample(-2.0) >= -1.0);
     }
+
+    #[test]
+    fn flat_eq_response_is_near_zero_db() {
+        let eq = ParametricEQ::new(10, 48_000.0);
+        let response = eq.compute_frequency_response(64);
+        assert_eq!(response.len(), 64);
+        for (freq, mag_db) in &response {
+            assert!(freq.is_finite(), "frequency should be finite");
+            assert!(
+                mag_db.abs() < 0.1,
+                "flat EQ should be ~0 dB, got {mag_db} dB at {freq} Hz"
+            );
+        }
+    }
+
+    #[test]
+    fn get_bands_returns_correct_count() {
+        let eq = ParametricEQ::new(10, 48_000.0);
+        let bands = eq.get_bands();
+        assert_eq!(bands.len(), 10);
+        for (freq, gain, q) in &bands {
+            assert!(*freq > 0.0);
+            assert!((*gain - 0.0).abs() < f32::EPSILON);
+            assert!((*q - 1.0).abs() < f32::EPSILON);
+        }
+    }
+
+    #[test]
+    fn boosted_band_shows_positive_response() {
+        let eq = ParametricEQ::new(10, 48_000.0);
+        eq.update_band(4, 1000.0, 12.0, 1.0).unwrap();
+        let response = eq.compute_frequency_response(128);
+        // Find the response near 1000 Hz
+        let near_1k: Vec<_> = response
+            .iter()
+            .filter(|(f, _)| *f > 800.0 && *f < 1200.0)
+            .collect();
+        assert!(
+            near_1k.iter().any(|(_, db)| *db > 5.0),
+            "12 dB boost at 1kHz should produce a positive peak in response"
+        );
+    }
 }
