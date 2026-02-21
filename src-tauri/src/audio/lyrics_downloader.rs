@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 const LRCLIB_GET_URL: &str = "https://lrclib.net/api/get";
+const LYRICS_CACHE_MAX_FILES: usize = 512;
 
 pub fn download_lyrics_for_track(
     track_path: &Path,
@@ -49,6 +50,7 @@ pub fn download_lyrics_for_track(
         .filter(|value| !value.trim().is_empty())?;
     if let Some(parent) = cache_path.parent() {
         let _ = fs::create_dir_all(parent);
+        prune_flat_cache_dir(parent, LYRICS_CACHE_MAX_FILES);
     }
     fs::write(&cache_path, synced).ok()?;
     Some(cache_path)
@@ -58,7 +60,11 @@ pub fn cached_lyrics_path(track_path: &Path) -> PathBuf {
     let mut hash = Sha256::new();
     hash.update(track_path.to_string_lossy().as_bytes());
     let filename = format!("{:x}.lrc", hash.finalize());
-    app_dir().join(".lyrics_cache").join(filename)
+    lyrics_cache_dir().join(filename)
+}
+
+pub fn lyrics_cache_dir() -> PathBuf {
+    app_dir().join(".lyrics_cache")
 }
 
 #[cfg(not(test))]
@@ -75,4 +81,33 @@ fn app_dir() -> PathBuf {
 struct LrcLibResponse {
     #[serde(rename = "syncedLyrics")]
     synced_lyrics: Option<String>,
+}
+
+fn prune_flat_cache_dir(dir: &Path, max_files: usize) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut files = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let path = entry.path();
+            if !path.is_file() {
+                return None;
+            }
+            let modified = entry
+                .metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            Some((path, modified))
+        })
+        .collect::<Vec<_>>();
+
+    if files.len() <= max_files {
+        return;
+    }
+    files.sort_by_key(|(_, modified)| *modified);
+    for (path, _) in files.iter().take(files.len() - max_files) {
+        let _ = fs::remove_file(path);
+    }
 }
