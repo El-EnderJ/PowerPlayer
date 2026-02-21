@@ -35,6 +35,7 @@ The React frontend is a "puppet" that:
 | 2026-02-21 | Project initialization: created Tauri + React + TS structure, README, docs, and CONTEXT.md | Build basic IPC bridge between React and Rust to load a .FLAC file |
 | 2026-02-21 | DSP pipeline implemented in Rust audio engine: DF2T biquad module, 10-band parametric EQ, pre-amp stage, soft limiter, and Tauri command to update EQ bands | Expose remaining playback + DSP controls to frontend and bind them to UI |
 | 2026-02-21 | Phase 3 UI: FFT bridge (rustfft), VisualEQ canvas component, Fluid Glass aesthetic (FluidBackground, PlaybackControls with neon glow), Framer Motion transitions, new Tauri commands (get_eq_bands, get_eq_frequency_response, get_fft_data) | Wire file-open dialog, real-time FFT from audio callback, seek bar, volume sliders |
+| 2026-02-21 | Integrated native file dialog + `load_track` IPC with metadata payload (artist/title/cover), added `get_vibe_data` real-time feed, seek/progress and logarithmic volume sliders, and dev FPS counter | Add playlist/library management and persist playback state |
 
 ## DSP Topology (Engine)
 
@@ -54,6 +55,11 @@ The React frontend is a "puppet" that:
 | `get_eq_bands()` | Frontend ← Rust | Returns all EQ band parameters (frequency, gain_db, q_factor) |
 | `get_eq_frequency_response(num_points)` | Frontend ← Rust | Returns the combined EQ magnitude response curve |
 | `get_fft_data()` | Frontend ← Rust | Returns FFT frequency magnitude data for spectrum visualization |
+| `load_track(path)` | Frontend → Rust | Loads selected audio file and returns artist/title/cover/duration metadata |
+| `play()` / `pause()` | Frontend → Rust | Toggles playback state in audio engine |
+| `seek(seconds)` | Frontend → Rust | Requests playback repositioning in seconds |
+| `set_volume(volume)` | Frontend → Rust | Applies final output gain (0..1, UI uses logarithmic mapping) |
+| `get_vibe_data()` | Frontend ← Rust | Returns current FFT spectrum + instantaneous amplitude from callback buffer |
 
 ### Frontend Components
 - **VisualEQ**: Canvas-based parametric EQ editor. Drag points for freq/gain; scroll for Q. Uses `requestAnimationFrame` for 60fps+ rendering.

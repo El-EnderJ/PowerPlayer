@@ -6,6 +6,12 @@ const FFT_SIZE: usize = 2048;
 /// Returns `FFT_SIZE / 2` magnitude values in dB (normalized).
 pub fn compute_spectrum(samples: &[f32]) -> Vec<f32> {
     let mono = to_mono(samples);
+    compute_spectrum_mono(&mono)
+}
+
+/// Computes FFT magnitude spectrum from mono audio samples.
+/// Returns `FFT_SIZE / 2` magnitude values in dB (normalized).
+pub fn compute_spectrum_mono(mono: &[f32]) -> Vec<f32> {
     if mono.len() < FFT_SIZE {
         return vec![-100.0; FFT_SIZE / 2];
     }

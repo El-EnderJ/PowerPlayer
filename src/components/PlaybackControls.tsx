@@ -1,4 +1,5 @@
 import { motion } from "framer-motion";
+import ProgressBar from "./ProgressBar";
 
 interface PlaybackControlsProps {
   isPlaying: boolean;
@@ -7,6 +8,11 @@ interface PlaybackControlsProps {
   onSkipForward: () => void;
   onSkipBack: () => void;
   volume: number;
+  currentTime: number;
+  duration: number;
+  amplitude: number;
+  onSeek: (seconds: number) => void;
+  onVolumeChange: (volume: number) => void;
 }
 
 function GlassButton({
@@ -47,9 +53,14 @@ export default function PlaybackControls({
   onSkipForward,
   onSkipBack,
   volume,
+  currentTime,
+  duration,
+  amplitude,
+  onSeek,
+  onVolumeChange,
 }: PlaybackControlsProps) {
   // Scale glow intensity by volume (0-1)
-  const glowIntensity = Math.min(1, volume);
+  const glowIntensity = Math.min(1, Math.max(volume, amplitude));
   const glowStyle = {
     boxShadow: `0 0 ${20 + glowIntensity * 20}px rgba(139,92,246,${0.2 + glowIntensity * 0.3})`,
   };
@@ -59,9 +70,12 @@ export default function PlaybackControls({
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.5, ease: "easeOut" }}
-      className="flex items-center justify-center gap-4 rounded-2xl border border-white/10 bg-white/5 px-8 py-4 backdrop-blur-xl"
+      className="flex w-full max-w-2xl flex-col gap-4 rounded-2xl border border-white/10 bg-white/5 px-6 py-4 backdrop-blur-xl"
       style={glowStyle}
     >
+      <ProgressBar currentTime={currentTime} duration={duration} onSeek={onSeek} />
+
+      <div className="flex items-center justify-center gap-4">
       {/* Skip Back */}
       <GlassButton onClick={onSkipBack} size="sm">
         <svg
@@ -108,6 +122,20 @@ export default function PlaybackControls({
           <path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z" />
         </svg>
       </GlassButton>
+      </div>
+
+      <div className="flex items-center gap-3">
+        <span className="w-14 text-xs text-white/60">Volume</span>
+        <input
+          type="range"
+          min={0}
+          max={1}
+          step={0.01}
+          value={volume}
+          onChange={(event) => onVolumeChange(Number(event.target.value))}
+          className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-white/20 accent-violet-400"
+        />
+      </div>
     </motion.div>
   );
 }

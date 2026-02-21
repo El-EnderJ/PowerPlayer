@@ -1,22 +1,164 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import FluidBackground from "./components/FluidBackground";
 import PlaybackControls from "./components/PlaybackControls";
 import VisualEQ from "./components/VisualEQ";
 
+interface TrackData {
+  artist: string;
+  title: string;
+  cover_art?: {
+    media_type: string;
+    data: number[];
+  };
+  duration_seconds: number;
+}
+
+interface VibeData {
+  spectrum: number[];
+  amplitude: number;
+}
+
+const VOLUME_SLIDER_DB_RANGE = 60;
+const VIBE_SKIP_THRESHOLD_MS = 8;
+
 function App() {
   const [isPlaying, setIsPlaying] = useState(false);
-  const [volume] = useState(0.75);
-  const [albumArt] = useState<string | undefined>(undefined);
+  const [volume, setVolume] = useState(0.75);
+  const [albumArt, setAlbumArt] = useState<string | undefined>(undefined);
+  const [trackTitle, setTrackTitle] = useState("PowerPlayer");
+  const [trackArtist, setTrackArtist] = useState("Hi-Res Audio Player");
+  const [duration, setDuration] = useState(0);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [spectrum, setSpectrum] = useState<number[]>([]);
+  const [amplitude, setAmplitude] = useState(0);
+  const [fps, setFps] = useState(0);
+  const pendingVibeRef = useRef(false);
+  const skipFrameRef = useRef(false);
+  const activeArtUrlRef = useRef<string | null>(null);
 
-  const handlePlay = useCallback(() => setIsPlaying(true), []);
-  const handlePause = useCallback(() => setIsPlaying(false), []);
+  const handlePlay = useCallback(() => {
+    setIsPlaying(true);
+    void invoke("play");
+  }, []);
+  const handlePause = useCallback(() => {
+    setIsPlaying(false);
+    void invoke("pause");
+  }, []);
   const handleSkipForward = useCallback(() => {
-    /* will invoke Rust skip command */
-  }, []);
+    const next = Math.min(duration, currentTime + 10);
+    setCurrentTime(next);
+    void invoke("seek", { seconds: next });
+  }, [currentTime, duration]);
   const handleSkipBack = useCallback(() => {
-    /* will invoke Rust skip command */
+    const prev = Math.max(0, currentTime - 10);
+    setCurrentTime(prev);
+    void invoke("seek", { seconds: prev });
+  }, [currentTime]);
+
+  const handleOpenTrack = useCallback(async () => {
+    try {
+      const selected = await open({
+        filters: [{ name: "Audio", extensions: ["flac", "mp3", "wav"] }],
+        multiple: false,
+      });
+      if (!selected || Array.isArray(selected)) return;
+
+      const track = await invoke<TrackData>("load_track", { path: selected });
+      setTrackTitle(track.title || "Unknown Title");
+      setTrackArtist(track.artist || "Unknown Artist");
+      setDuration(track.duration_seconds || 0);
+      setCurrentTime(0);
+      if (track.cover_art) {
+        if (activeArtUrlRef.current) {
+          URL.revokeObjectURL(activeArtUrlRef.current);
+        }
+        const blob = new Blob([new Uint8Array(track.cover_art.data)], {
+          type: track.cover_art.media_type || "image/jpeg",
+        });
+        const artUrl = URL.createObjectURL(blob);
+        activeArtUrlRef.current = artUrl;
+        setAlbumArt(artUrl);
+      } else {
+        setAlbumArt(undefined);
+      }
+    } catch (error) {
+      if (import.meta.env.DEV) {
+        console.error("track load failed", error);
+      }
+    }
   }, []);
+
+  const handleSeek = useCallback((seconds: number) => {
+    setCurrentTime(seconds);
+    void invoke("seek", { seconds });
+  }, []);
+
+  const handleVolume = useCallback((sliderVolume: number) => {
+    setVolume(sliderVolume);
+    const linearVolume =
+      sliderVolume <= 0
+        ? 0
+        : Math.pow(
+            10,
+            (sliderVolume * VOLUME_SLIDER_DB_RANGE - VOLUME_SLIDER_DB_RANGE) / 20
+          );
+    void invoke("set_volume", { volume: linearVolume });
+  }, []);
+
+  useEffect(() => {
+    let frameCounter = 0;
+    let lastFpsSample = performance.now();
+    let rafId = 0;
+
+    const tick = () => {
+      rafId = requestAnimationFrame(tick);
+      frameCounter += 1;
+      const now = performance.now();
+      if (now - lastFpsSample >= 1000) {
+        setFps(frameCounter);
+        frameCounter = 0;
+        lastFpsSample = now;
+      }
+
+      if (pendingVibeRef.current) return;
+      if (skipFrameRef.current) {
+        skipFrameRef.current = false;
+        return;
+      }
+
+      pendingVibeRef.current = true;
+      const start = performance.now();
+      invoke<VibeData>("get_vibe_data")
+        .then((vibe) => {
+          setSpectrum(vibe.spectrum);
+          setAmplitude(vibe.amplitude);
+        })
+        .catch(() => {})
+        .finally(() => {
+          if (performance.now() - start > VIBE_SKIP_THRESHOLD_MS) {
+            skipFrameRef.current = true;
+          }
+          pendingVibeRef.current = false;
+        });
+    };
+
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (activeArtUrlRef.current) {
+        URL.revokeObjectURL(activeArtUrlRef.current);
+      }
+    },
+    []
+  );
+
+  const showFps = import.meta.env.DEV;
 
   return (
     <>
@@ -53,11 +195,19 @@ function App() {
               )}
             </div>
             <div className="text-center">
-              <h1 className="text-xl font-semibold text-white">PowerPlayer</h1>
-              <p className="text-sm text-white/50">Hi-Res Audio Player</p>
+              <h1 className="text-xl font-semibold text-white">{trackTitle}</h1>
+              <p className="text-sm text-white/50">{trackArtist}</p>
             </div>
           </motion.div>
         </AnimatePresence>
+
+        <button
+          type="button"
+          onClick={handleOpenTrack}
+          className="rounded-lg border border-white/20 bg-white/10 px-4 py-2 text-xs text-white/80 transition hover:bg-white/20"
+        >
+          Open Track
+        </button>
 
         {/* Playback Controls */}
         <PlaybackControls
@@ -67,16 +217,25 @@ function App() {
           onSkipForward={handleSkipForward}
           onSkipBack={handleSkipBack}
           volume={volume}
+          currentTime={currentTime}
+          duration={duration}
+          amplitude={amplitude}
+          onSeek={handleSeek}
+          onVolumeChange={handleVolume}
         />
 
         {/* Visual EQ */}
         <div className="w-full max-w-2xl">
-          <VisualEQ />
+          <VisualEQ spectrum={spectrum} />
         </div>
       </div>
+      {showFps ? (
+        <div className="pointer-events-none fixed right-3 top-3 rounded bg-black/50 px-2 py-1 text-xs text-white/80">
+          {fps} FPS
+        </div>
+      ) : null}
     </>
   );
 }
 
 export default App;
-

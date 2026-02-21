@@ -1,6 +1,6 @@
 # Current Project State
 
-## Status: Phase 3: UI Aesthetic & Visualizer en desarrollo
+## Status: Phase 3: Real-Time integration completed
 
 **Last updated**: 2026-02-21
 
@@ -15,15 +15,16 @@
 - Tauri IPC commands: `update_eq_band`, `get_eq_bands`, `get_eq_frequency_response`, `get_fft_data`
 - VisualEQ component: interactive canvas-based parametric EQ with drag points and scroll Q adjustment
 - Fluid Glass UI: FluidBackground (blur album art), PlaybackControls (glass effects + neon glow), Framer Motion transitions
+- Native file loading with `tauri-plugin-dialog` and backend `load_track` metadata payload (artist/title/cover/duration)
+- Real-time vibe feed (`get_vibe_data`) connected to requestAnimationFrame visual updates and neon glow intensity
+- Seek `ProgressBar` with debounced `seek(seconds)` calls and logarithmic volume slider mapping
+- Optional dev FPS counter for canvas/render profiling
 
 ### In Progress
-- UI-DSP integration and real-time visualization pipeline
-- Connect playback controls to Rust audio engine commands
-- Album art extraction and display
+- Playlist/library workflow and queue management
 
 ### Next Steps
-1. Wire file-open dialog to `load_track` Rust command
-2. Implement real-time FFT spectrum from audio callback buffer
-3. Add seek bar and time display
-4. Volume and pre-amp sliders in UI
-5. Performance profiling of canvas rendering at 120fps
+1. Add playlist/library browser and persistent queue
+2. Improve transport controls (next/previous actual track navigation)
+3. Expand metadata coverage and fallback artwork strategies
+4. Add automated integration tests for IPC playback flows

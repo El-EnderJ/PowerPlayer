@@ -299,17 +299,14 @@ impl ParametricEQ {
                     FilterType::HighShelf => {
                         high_shelf_coefficients(self.sample_rate, band_freq, gain_db, q)
                     }
-                    FilterType::HighPass => {
-                        high_pass_coefficients(self.sample_rate, band_freq, q)
-                    }
-                    FilterType::LowPass => {
-                        low_pass_coefficients(self.sample_rate, band_freq, q)
-                    }
+                    FilterType::HighPass => high_pass_coefficients(self.sample_rate, band_freq, q),
+                    FilterType::LowPass => low_pass_coefficients(self.sample_rate, band_freq, q),
                 };
 
                 // |H(e^jw)|^2 = (b0^2 + b1^2 + b2^2 + 2*(b0*b1+b1*b2)*cos(w) + 2*b0*b2*cos(2w))
                 //              / (1    + a1^2 + a2^2 + 2*(a1+a1*a2)*cos(w)     + 2*a2*cos(2w))
-                let num = (coeffs.b0 * coeffs.b0 + coeffs.b1 * coeffs.b1 + coeffs.b2 * coeffs.b2) as f64
+                let num = (coeffs.b0 * coeffs.b0 + coeffs.b1 * coeffs.b1 + coeffs.b2 * coeffs.b2)
+                    as f64
                     + 2.0 * (coeffs.b0 * coeffs.b1 + coeffs.b1 * coeffs.b2) as f64 * cos_w as f64
                     + 2.0 * (coeffs.b0 * coeffs.b2) as f64 * cos_2w as f64;
                 let den = (1.0 + coeffs.a1 * coeffs.a1 + coeffs.a2 * coeffs.a2) as f64

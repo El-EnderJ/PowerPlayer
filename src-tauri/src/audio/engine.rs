@@ -1,6 +1,8 @@
+use super::dsp::fft::compute_spectrum_mono;
+use super::dsp::filters::ParametricEQ;
 #[cfg(target_os = "windows")]
 use super::dsp::filters::SoftLimiter;
-use super::dsp::filters::ParametricEQ;
+use std::collections::VecDeque;
 use std::{
     path::Path,
     sync::{
@@ -31,6 +33,9 @@ use super::decoder::{decode_file, resample_linear, DecodedTrack};
 
 const STATE_PAUSED: u8 = 0;
 const STATE_PLAYING: u8 = 1;
+/// Sample history used by the visualizer FFT.
+/// 4096 mono samples balance frequency detail while keeping visual updates responsive.
+const VIBE_WINDOW_SAMPLES: usize = 4096;
 
 /// 4096 frames is a low-latency compromise: enough headroom against occasional decode jitter
 /// while keeping callback fill chunks small to reduce interaction latency for pause/seek.
@@ -51,6 +56,9 @@ struct AudioEngine {
     preamp_db_bits: AtomicU32,
     output_rate_hz: AtomicU32,
     seek_frame: AtomicU32,
+    track_duration_bits: AtomicU32,
+    vibe_amplitude_bits: AtomicU32,
+    vibe_samples: Mutex<VecDeque<f32>>,
     eq: Mutex<ParametricEQ>,
     #[cfg(target_os = "windows")]
     limiter: SoftLimiter,
@@ -71,6 +79,9 @@ impl AudioState {
                 preamp_db_bits: AtomicU32::new(0.0_f32.to_bits()),
                 output_rate_hz: AtomicU32::new(48_000),
                 seek_frame: AtomicU32::new(0),
+                track_duration_bits: AtomicU32::new(0.0_f32.to_bits()),
+                vibe_amplitude_bits: AtomicU32::new(0.0_f32.to_bits()),
+                vibe_samples: Mutex::new(VecDeque::with_capacity(VIBE_WINDOW_SAMPLES)),
                 eq: Mutex::new(ParametricEQ::new(10, 48_000.0)),
                 #[cfg(target_os = "windows")]
                 limiter: SoftLimiter::new(),
@@ -141,6 +152,10 @@ impl AudioState {
             );
             pcm = adapt_channels(&pcm, source_channels, output_channels);
         }
+        self.inner.track_duration_bits.store(
+            (pcm.len() as f32 / output_channels as f32 / output_rate as f32).to_bits(),
+            Ordering::SeqCst,
+        );
 
         let ring = HeapRb::<f32>::new(RING_BUFFER_FRAMES * output_channels);
         let (mut producer, mut consumer) = ring.split();
@@ -241,6 +256,16 @@ impl AudioState {
         Err("Audio engine WASAPI implementation is only available on Windows targets".to_string())
     }
 
+    #[cfg(target_os = "windows")]
+    pub fn playback_supported(&self) -> bool {
+        true
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    pub fn playback_supported(&self) -> bool {
+        false
+    }
+
     pub fn play(&self) {
         self.inner.is_playing.store(STATE_PLAYING, Ordering::SeqCst);
     }
@@ -292,6 +317,25 @@ impl AudioState {
     pub fn get_eq_frequency_response(&self, num_points: usize) -> Result<Vec<(f32, f32)>, String> {
         let eq = self.inner.eq.lock().map_err(lock_err)?;
         Ok(eq.compute_frequency_response(num_points))
+    }
+
+    pub fn get_vibe_data(&self) -> (Vec<f32>, f32) {
+        let mono = self
+            .inner
+            .vibe_samples
+            .lock()
+            .map(|samples| samples.iter().copied().collect::<Vec<_>>())
+            .unwrap_or_default();
+        let amplitude = f32::from_bits(self.inner.vibe_amplitude_bits.load(Ordering::Relaxed));
+        if mono.is_empty() {
+            return (vec![-100.0; 1024], amplitude);
+        }
+
+        (compute_spectrum_mono(&mono), amplitude)
+    }
+
+    pub fn get_track_duration_seconds(&self) -> f32 {
+        f32::from_bits(self.inner.track_duration_bits.load(Ordering::Relaxed))
     }
 
     #[cfg(test)]
@@ -429,6 +473,7 @@ fn write_samples(
             *out_sample = engine.limiter.process_sample(sample) * volume;
         }
     }
+    update_vibe_from_f32(engine, output, frame_channels);
 }
 
 #[cfg(target_os = "windows")]
@@ -471,6 +516,7 @@ fn write_samples_i16(
             *out_sample = (limited.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
         }
     }
+    update_vibe_from_i16(engine, output, frame_channels);
 }
 
 #[cfg(target_os = "windows")]
@@ -513,11 +559,76 @@ fn write_samples_u16(
             *out_sample = (((limited.clamp(-1.0, 1.0) + 1.0) * 0.5) * u16::MAX as f32) as u16;
         }
     }
+    update_vibe_from_u16(engine, output, frame_channels);
 }
 
 #[cfg(target_os = "windows")]
 fn db_to_gain(db: f32) -> f32 {
     10.0_f32.powf(db / 20.0)
+}
+
+#[cfg(target_os = "windows")]
+fn update_vibe_from_f32(engine: &AudioEngine, output: &[f32], channels: usize) {
+    let mut peak = 0.0_f32;
+    let mut mono = Vec::with_capacity(output.len() / channels.max(1));
+    for frame in output.chunks(channels.max(1)) {
+        let mut sum = 0.0_f32;
+        for sample in frame {
+            peak = peak.max(sample.abs());
+            sum += *sample;
+        }
+        mono.push(sum / frame.len() as f32);
+    }
+    update_vibe_state(engine, mono, peak);
+}
+
+#[cfg(target_os = "windows")]
+fn update_vibe_from_i16(engine: &AudioEngine, output: &[i16], channels: usize) {
+    let mut peak = 0.0_f32;
+    let mut mono = Vec::with_capacity(output.len() / channels.max(1));
+    for frame in output.chunks(channels.max(1)) {
+        let mut sum = 0.0_f32;
+        for sample in frame {
+            let normalized = *sample as f32 / i16::MAX as f32;
+            peak = peak.max(normalized.abs());
+            sum += normalized;
+        }
+        mono.push(sum / frame.len() as f32);
+    }
+    update_vibe_state(engine, mono, peak);
+}
+
+#[cfg(target_os = "windows")]
+fn update_vibe_from_u16(engine: &AudioEngine, output: &[u16], channels: usize) {
+    let mut peak = 0.0_f32;
+    let mut mono = Vec::with_capacity(output.len() / channels.max(1));
+    for frame in output.chunks(channels.max(1)) {
+        let mut sum = 0.0_f32;
+        for sample in frame {
+            let normalized = (*sample as f32 / u16::MAX as f32) * 2.0 - 1.0;
+            peak = peak.max(normalized.abs());
+            sum += normalized;
+        }
+        mono.push(sum / frame.len() as f32);
+    }
+    update_vibe_state(engine, mono, peak);
+}
+
+#[cfg(target_os = "windows")]
+fn update_vibe_state(engine: &AudioEngine, mono_samples: Vec<f32>, peak: f32) {
+    engine
+        .vibe_amplitude_bits
+        .store(peak.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+    if let Ok(mut shared) = engine.vibe_samples.lock() {
+        for sample in mono_samples {
+            shared.push_back(sample);
+        }
+        if shared.len() > VIBE_WINDOW_SAMPLES {
+            while shared.len() > VIBE_WINDOW_SAMPLES {
+                let _ = shared.pop_front();
+            }
+        }
+    }
 }
 
 fn lock_err<T>(_: T) -> String {
