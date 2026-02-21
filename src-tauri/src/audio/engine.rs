@@ -1,5 +1,6 @@
 #[cfg(target_os = "windows")]
-use super::dsp::filters::{ParametricEQ, SoftLimiter};
+use super::dsp::filters::SoftLimiter;
+use super::dsp::filters::ParametricEQ;
 use std::{
     path::Path,
     sync::{
@@ -50,7 +51,6 @@ struct AudioEngine {
     preamp_db_bits: AtomicU32,
     output_rate_hz: AtomicU32,
     seek_frame: AtomicU32,
-    #[cfg(target_os = "windows")]
     eq: Mutex<ParametricEQ>,
     #[cfg(target_os = "windows")]
     limiter: SoftLimiter,
@@ -71,7 +71,6 @@ impl AudioState {
                 preamp_db_bits: AtomicU32::new(0.0_f32.to_bits()),
                 output_rate_hz: AtomicU32::new(48_000),
                 seek_frame: AtomicU32::new(0),
-                #[cfg(target_os = "windows")]
                 eq: Mutex::new(ParametricEQ::new(10, 48_000.0)),
                 #[cfg(target_os = "windows")]
                 limiter: SoftLimiter::new(),
@@ -271,7 +270,6 @@ impl AudioState {
             .store(clamped.to_bits(), Ordering::SeqCst);
     }
 
-    #[cfg(target_os = "windows")]
     pub fn update_eq_band(
         &self,
         index: usize,
@@ -279,19 +277,21 @@ impl AudioState {
         gain_db: f32,
         q_factor: f32,
     ) -> Result<(), String> {
-        let mut eq = self.inner.eq.lock().map_err(lock_err)?;
+        let eq = self.inner.eq.lock().map_err(lock_err)?;
         eq.update_band(index, frequency, gain_db, q_factor)
     }
 
-    #[cfg(not(target_os = "windows"))]
-    pub fn update_eq_band(
-        &self,
-        _index: usize,
-        _frequency: f32,
-        _gain_db: f32,
-        _q_factor: f32,
-    ) -> Result<(), String> {
-        Err("EQ updates are only available on Windows targets".to_string())
+    /// Returns current EQ band parameters as Vec of (frequency, gain_db, q_factor).
+    pub fn get_eq_bands(&self) -> Result<Vec<(f32, f32, f32)>, String> {
+        let eq = self.inner.eq.lock().map_err(lock_err)?;
+        Ok(eq.get_bands())
+    }
+
+    /// Computes the combined EQ frequency response curve.
+    /// Returns Vec of (frequency_hz, magnitude_db) pairs.
+    pub fn get_eq_frequency_response(&self, num_points: usize) -> Result<Vec<(f32, f32)>, String> {
+        let eq = self.inner.eq.lock().map_err(lock_err)?;
+        Ok(eq.compute_frequency_response(num_points))
     }
 
     #[cfg(test)]
@@ -520,7 +520,6 @@ fn db_to_gain(db: f32) -> f32 {
     10.0_f32.powf(db / 20.0)
 }
 
-#[cfg(target_os = "windows")]
 fn lock_err<T>(_: T) -> String {
     "Audio state lock poisoned".to_string()
 }

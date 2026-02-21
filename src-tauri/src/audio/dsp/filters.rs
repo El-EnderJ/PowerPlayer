@@ -259,6 +259,74 @@ impl ParametricEQ {
             self.right_filters[index].coeffs = coeffs;
         }
     }
+
+    /// Returns band parameters as Vec of (frequency, gain_db, q_factor) tuples.
+    pub fn get_bands(&self) -> Vec<(f32, f32, f32)> {
+        self.bands
+            .iter()
+            .map(|b| (b.frequency(), b.gain_db(), b.q_factor()))
+            .collect()
+    }
+
+    /// Computes the combined magnitude response (dB) at logarithmically spaced frequencies.
+    /// Returns Vec of (frequency_hz, magnitude_db) pairs.
+    pub fn compute_frequency_response(&self, num_points: usize) -> Vec<(f32, f32)> {
+        let min_hz: f32 = 20.0;
+        let max_hz: f32 = (self.sample_rate * 0.5).min(20_000.0);
+        let n = num_points.max(2);
+        let mut result = Vec::with_capacity(n);
+
+        for i in 0..n {
+            let ratio = i as f32 / (n - 1) as f32;
+            let freq = min_hz * (max_hz / min_hz).powf(ratio);
+            let w = 2.0 * std::f32::consts::PI * freq / self.sample_rate;
+            let cos_w = w.cos();
+            let cos_2w = (2.0 * w).cos();
+
+            let mut total_mag_sq: f64 = 1.0;
+
+            for band in &self.bands {
+                let band_freq = sanitize_frequency(band.frequency(), self.sample_rate);
+                let gain_db = band.gain_db().clamp(-24.0, 24.0);
+                let q = sanitize_q(band.q_factor());
+                let coeffs = match band.filter_type {
+                    FilterType::Peaking => {
+                        peaking_coefficients(self.sample_rate, band_freq, gain_db, q)
+                    }
+                    FilterType::LowShelf => {
+                        low_shelf_coefficients(self.sample_rate, band_freq, gain_db, q)
+                    }
+                    FilterType::HighShelf => {
+                        high_shelf_coefficients(self.sample_rate, band_freq, gain_db, q)
+                    }
+                    FilterType::HighPass => {
+                        high_pass_coefficients(self.sample_rate, band_freq, q)
+                    }
+                    FilterType::LowPass => {
+                        low_pass_coefficients(self.sample_rate, band_freq, q)
+                    }
+                };
+
+                // |H(e^jw)|^2 = (b0^2 + b1^2 + b2^2 + 2*(b0*b1+b1*b2)*cos(w) + 2*b0*b2*cos(2w))
+                //              / (1    + a1^2 + a2^2 + 2*(a1+a1*a2)*cos(w)     + 2*a2*cos(2w))
+                let num = (coeffs.b0 * coeffs.b0 + coeffs.b1 * coeffs.b1 + coeffs.b2 * coeffs.b2) as f64
+                    + 2.0 * (coeffs.b0 * coeffs.b1 + coeffs.b1 * coeffs.b2) as f64 * cos_w as f64
+                    + 2.0 * (coeffs.b0 * coeffs.b2) as f64 * cos_2w as f64;
+                let den = (1.0 + coeffs.a1 * coeffs.a1 + coeffs.a2 * coeffs.a2) as f64
+                    + 2.0 * (coeffs.a1 + coeffs.a1 * coeffs.a2) as f64 * cos_w as f64
+                    + 2.0 * coeffs.a2 as f64 * cos_2w as f64;
+
+                if den.abs() > 1e-12 {
+                    total_mag_sq *= num / den;
+                }
+            }
+
+            let mag_db = 10.0 * total_mag_sq.max(1e-12).log10();
+            result.push((freq, mag_db as f32));
+        }
+
+        result
+    }
 }
 
 impl Default for ParametricEQ {
@@ -440,5 +508,47 @@ mod tests {
         let limiter = SoftLimiter::new();
         assert!(limiter.process_sample(2.0) <= 1.0);
         assert!(limiter.process_sample(-2.0) >= -1.0);
+    }
+
+    #[test]
+    fn flat_eq_response_is_near_zero_db() {
+        let eq = ParametricEQ::new(10, 48_000.0);
+        let response = eq.compute_frequency_response(64);
+        assert_eq!(response.len(), 64);
+        for (freq, mag_db) in &response {
+            assert!(freq.is_finite(), "frequency should be finite");
+            assert!(
+                mag_db.abs() < 0.1,
+                "flat EQ should be ~0 dB, got {mag_db} dB at {freq} Hz"
+            );
+        }
+    }
+
+    #[test]
+    fn get_bands_returns_correct_count() {
+        let eq = ParametricEQ::new(10, 48_000.0);
+        let bands = eq.get_bands();
+        assert_eq!(bands.len(), 10);
+        for (freq, gain, q) in &bands {
+            assert!(*freq > 0.0);
+            assert!((*gain - 0.0).abs() < f32::EPSILON);
+            assert!((*q - 1.0).abs() < f32::EPSILON);
+        }
+    }
+
+    #[test]
+    fn boosted_band_shows_positive_response() {
+        let eq = ParametricEQ::new(10, 48_000.0);
+        eq.update_band(4, 1000.0, 12.0, 1.0).unwrap();
+        let response = eq.compute_frequency_response(128);
+        // Find the response near 1000 Hz
+        let near_1k: Vec<_> = response
+            .iter()
+            .filter(|(f, _)| *f > 800.0 && *f < 1200.0)
+            .collect();
+        assert!(
+            near_1k.iter().any(|(_, db)| *db > 5.0),
+            "12 dB boost at 1kHz should produce a positive peak in response"
+        );
     }
 }

@@ -34,6 +34,7 @@ The React frontend is a "puppet" that:
 |------|---------------|-----------|
 | 2026-02-21 | Project initialization: created Tauri + React + TS structure, README, docs, and CONTEXT.md | Build basic IPC bridge between React and Rust to load a .FLAC file |
 | 2026-02-21 | DSP pipeline implemented in Rust audio engine: DF2T biquad module, 10-band parametric EQ, pre-amp stage, soft limiter, and Tauri command to update EQ bands | Expose remaining playback + DSP controls to frontend and bind them to UI |
+| 2026-02-21 | Phase 3 UI: FFT bridge (rustfft), VisualEQ canvas component, Fluid Glass aesthetic (FluidBackground, PlaybackControls with neon glow), Framer Motion transitions, new Tauri commands (get_eq_bands, get_eq_frequency_response, get_fft_data) | Wire file-open dialog, real-time FFT from audio callback, seek bar, volume sliders |
 
 ## DSP Topology (Engine)
 
@@ -43,3 +44,23 @@ The React frontend is a "puppet" that:
   - Coefficients are recalculated **only when parameters change**.
 - **Soft Limiter**: final protection stage (threshold near **-0.1 dBFS**) to avoid digital clipping.
 - **Order**: `Input sample -> Pre-Amp -> ParametricEQ (L/R independent, shared params) -> Soft Limiter -> Output`.
+
+## UI-DSP Integration
+
+### Tauri IPC Commands
+| Command | Direction | Description |
+|---------|-----------|-------------|
+| `update_eq_band(index, freq, gain, q)` | Frontend → Rust | Updates a single EQ band in real-time |
+| `get_eq_bands()` | Frontend ← Rust | Returns all EQ band parameters (frequency, gain_db, q_factor) |
+| `get_eq_frequency_response(num_points)` | Frontend ← Rust | Returns the combined EQ magnitude response curve |
+| `get_fft_data()` | Frontend ← Rust | Returns FFT frequency magnitude data for spectrum visualization |
+
+### Frontend Components
+- **VisualEQ**: Canvas-based parametric EQ editor. Drag points for freq/gain; scroll for Q. Uses `requestAnimationFrame` for 60fps+ rendering.
+- **FluidBackground**: Album art with `blur(80px)` and rotation/pulsation animation. Falls back to animated gradient.
+- **PlaybackControls**: Glass-effect buttons with `backdrop-blur`, semi-transparent borders, and neon glow that reacts to volume level.
+
+### Performance Notes
+- Canvas rendering uses `requestAnimationFrame` to avoid blocking the main thread.
+- EQ curve and FFT data updates are debounced through React state batching.
+- All heavy computation (FFT, coefficient calculation) runs in Rust; the frontend only draws.
