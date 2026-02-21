@@ -1,6 +1,6 @@
 # Current Project State
 
-## Status: Phase 3: Real-Time integration completed
+## Status: Phase 4: Lyrics Engine started
 
 **Last updated**: 2026-02-21
 
@@ -21,10 +21,11 @@
 - Optional dev FPS counter for canvas/render profiling
 
 ### In Progress
+- Dynamic Lyrics Engine (Rust `.lrc` parsing + playback-synced lyric events + immersive lyrics view)
 - Playlist/library workflow and queue management
 
 ### Next Steps
-1. Add playlist/library browser and persistent queue
-2. Improve transport controls (next/previous actual track navigation)
-3. Expand metadata coverage and fallback artwork strategies
+1. Polish Lyrics Engine with richer transitions and error states
+2. Add playlist/library browser and persistent queue
+3. Improve transport controls (next/previous actual track navigation)
 4. Add automated integration tests for IPC playback flows
