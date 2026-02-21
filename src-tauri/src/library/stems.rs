@@ -186,7 +186,7 @@ impl StemSeparator {
             progress_cb(StemProgress {
                 track_id: track_path.to_string(),
                 percent: 1.0,
-                stage: "Incomplete stem cache, using original track".to_string(),
+                stage: "Incomplete stem cache detected, falling back to original track (no separation)".to_string(),
             });
             return Ok(Self::original_track_paths(track_path));
         }
