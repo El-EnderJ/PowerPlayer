@@ -37,6 +37,7 @@ The React frontend is a "puppet" that:
 | 2026-02-21 | Phase 3 UI: FFT bridge (rustfft), VisualEQ canvas component, Fluid Glass aesthetic (FluidBackground, PlaybackControls with neon glow), Framer Motion transitions, new Tauri commands (get_eq_bands, get_eq_frequency_response, get_fft_data) | Wire file-open dialog, real-time FFT from audio callback, seek bar, volume sliders |
 | 2026-02-21 | Integrated native file dialog + `load_track` IPC with metadata payload (artist/title/cover), added `get_vibe_data` real-time feed, seek/progress and logarithmic volume sliders, and dev FPS counter | Add playlist/library management and persist playback state |
 | 2026-02-21 | Phase 4 kickoff: Dynamic Lyrics Engine with `.lrc` parser in Rust, playback-synced `lyrics-line-changed` events, fullscreen LyricsView focus animation, and expanded spectrum fallback when no lyrics exist | Add karaoke-style word-level timing and playlist-aware lyrics preloading |
+| 2026-02-21 | Phase B backend implemented: SQLite pool persistence (`tracks/albums/settings`), multithreaded library scan (`walkdir`+`rayon`) with metadata persistence, and AutoEQ 10-band profile activation path | Connect library + AutoEQ device suggestions to frontend interactions |
 
 ## DSP Topology (Engine)
 
@@ -62,6 +63,9 @@ The React frontend is a "puppet" that:
 | `set_volume(volume)` | Frontend → Rust | Applies final output gain (0..1, UI uses logarithmic mapping) |
 | `get_vibe_data()` | Frontend ← Rust | Returns current FFT spectrum + instantaneous amplitude from callback buffer |
 | `get_lyrics_lines()` | Frontend ← Rust | Returns parsed `.lrc` lines (`timestamp` in ms + lyric text) for the loaded track |
+| `scan_library(path)` | Frontend → Rust | Recursively scans audio files in a folder and persists metadata in SQLite (`tracks` upsert by path) |
+| `get_library_tracks()` | Frontend ← Rust | Returns persisted library tracks from SQLite for browser/queue UIs |
+| `activate_autoeq_profile(model)` | Frontend → Rust | Resolves a 10-band AutoEQ profile for headphone model and applies bands via existing EQ update path |
 
 ### Lyrics Synchronization Flow
 - Backend resolves `<track_name>.lrc` next to the loaded audio file and parses `[mm:ss.xx]` tags into `LyricsLine { timestamp, text }`.
