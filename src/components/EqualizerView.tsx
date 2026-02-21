@@ -447,28 +447,36 @@ function EqualizerView({ spectrum = [] }: EqualizerViewProps) {
   }, []);
 
   const updateBand = useCallback((index: number, gain: number) => {
-    setBands((prev) =>
-      prev.map((b) =>
+    setBands((prev) => {
+      const band = prev.find((b) => b.index === index);
+      if (band) {
+        invoke("update_eq_band", {
+          index,
+          freq: band.frequency,
+          gain,
+          q: band.q_factor,
+        }).catch(() => {});
+      }
+      return prev.map((b) =>
         b.index === index ? { ...b, gain_db: gain } : b
-      )
-    );
-    // Debounced backend update
-    invoke("update_eq_band", {
-      index,
-      freq: 0, // keep current freq
-      gain,
-      q: 0, // keep current q
-    }).catch(() => {});
+      );
+    });
   }, []);
 
   const handleBassChange = useCallback((v: number) => {
     setBass(v);
-    invoke("set_tone", { bass: v, treble: 0 }).catch(() => {});
+    setTreble((prev) => {
+      invoke("set_tone", { bass: v, treble: prev }).catch(() => {});
+      return prev;
+    });
   }, []);
 
   const handleTrebleChange = useCallback((v: number) => {
     setTreble(v);
-    invoke("set_tone", { bass: 0, treble: v }).catch(() => {});
+    setBass((prev) => {
+      invoke("set_tone", { bass: prev, treble: v }).catch(() => {});
+      return prev;
+    });
   }, []);
 
   const handleBalanceChange = useCallback((v: number) => {
