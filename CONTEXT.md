@@ -38,6 +38,7 @@ The React frontend is a "puppet" that:
 | 2026-02-21 | Integrated native file dialog + `load_track` IPC with metadata payload (artist/title/cover), added `get_vibe_data` real-time feed, seek/progress and logarithmic volume sliders, and dev FPS counter | Add playlist/library management and persist playback state |
 | 2026-02-21 | Phase 4 kickoff: Dynamic Lyrics Engine with `.lrc` parser in Rust, playback-synced `lyrics-line-changed` events, fullscreen LyricsView focus animation, and expanded spectrum fallback when no lyrics exist | Add karaoke-style word-level timing and playlist-aware lyrics preloading |
 | 2026-02-21 | Phase B backend implemented: SQLite pool persistence (`tracks/albums/settings`), multithreaded library scan (`walkdir`+`rayon`) with metadata persistence, and AutoEQ 10-band profile activation path | Connect library + AutoEQ device suggestions to frontend interactions |
+| 2026-02-21 | Backend hardening: added SHA-256 art thumbnail cache (`asset://` URLs), optional next-track look-ahead preloading at 95% progress, notify-based realtime library watcher, and corrupted-track persistence | Use cached art + corrupted flags in library UI and expose playlist queue wiring for automatic `set_next_track` |
 
 ## DSP Topology (Engine)
 
@@ -72,6 +73,16 @@ The React frontend is a "puppet" that:
 - `AudioState` keeps a playback frame counter updated by the output callback and converts it to milliseconds.
 - A monitor thread compares current time against lyric timestamps and emits `lyrics-line-changed` only when the active line index actually changes.
 - Frontend subscribes to the event and animates the centered active line in `LyricsView`; when no lyrics are available, it automatically switches to an expanded spectrum visual mode.
+
+### Library Art Cache Flow
+- During library scan (and watcher updates), backend attempts to read embedded cover art.
+- If cover art exists, a SHA-256 hash of the track path is used as cache key and a `256x256` JPEG thumbnail is written to local cache (`$TMP/powerplayer/art_cache`).
+- The track row stores an `art_url` in `asset://...` form so the library UI can render instantly without storing blob bytes in SQLite.
+
+### Gapless Look-ahead Flow
+- `AudioState` now stores an optional `next_track` path (`set_next_track(path)` IPC).
+- Output callback computes playback progress; once current track reaches `>=95%`, it arms look-ahead.
+- Producer thread pre-decodes the optional next track and swaps buffers immediately when current PCM ends, reusing the same stream for click-free, zero-restart transition behavior.
 
 ### Frontend Components
 - **VisualEQ**: Canvas-based parametric EQ editor. Drag points for freq/gain; scroll for Q. Uses `requestAnimationFrame` for 60fps+ rendering.

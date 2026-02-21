@@ -1,7 +1,12 @@
+use crate::audio::decoder::read_track_metadata;
 use crate::db::manager::{DbManager, TrackInput};
+use crate::library::art_cache;
 use id3::TagLike;
+use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use rayon::prelude::*;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use symphonia::core::{
     formats::FormatOptions,
@@ -16,14 +21,13 @@ pub fn scan_library_path(root: &Path, db: &DbManager) -> Result<usize, String> {
     let saved_count = AtomicUsize::new(0);
 
     files.par_iter().for_each(|path| {
-        if let Some(track) = extract_track(path) {
-            match db.save_track(&track) {
-                Ok(_) => {
-                    saved_count.fetch_add(1, Ordering::Relaxed);
-                }
-                Err(err) => {
-                    eprintln!("Failed to persist track {}: {err}", track.path);
-                }
+        let track = extract_track(path);
+        match db.save_track(&track) {
+            Ok(_) => {
+                saved_count.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(err) => {
+                eprintln!("Failed to persist track {}: {err}", track.path);
             }
         }
     });
@@ -51,9 +55,91 @@ fn collect_audio_files(root: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-fn extract_track(path: &Path) -> Option<TrackInput> {
+pub fn register_library_watch(path: &Path, db: &DbManager) -> Result<(), String> {
+    watcher_manager()
+        .lock()
+        .map_err(|_| "Library watcher lock poisoned".to_string())?
+        .register(path, db)
+}
+
+fn watcher_manager() -> &'static Mutex<LibraryWatcherManager> {
+    static MANAGER: OnceLock<Mutex<LibraryWatcherManager>> = OnceLock::new();
+    MANAGER.get_or_init(|| Mutex::new(LibraryWatcherManager::default()))
+}
+
+#[derive(Default)]
+struct LibraryWatcherManager {
+    watchers: Vec<RecommendedWatcher>,
+    watched_paths: HashSet<PathBuf>,
+}
+
+impl LibraryWatcherManager {
+    fn register(&mut self, path: &Path, db: &DbManager) -> Result<(), String> {
+        let canonical = path
+            .canonicalize()
+            .unwrap_or_else(|_| path.to_path_buf());
+        if self.watched_paths.contains(&canonical) {
+            return Ok(());
+        }
+
+        let db = db.clone();
+        let mut watcher = RecommendedWatcher::new(
+            move |event: notify::Result<Event>| {
+                if let Ok(event) = event {
+                    handle_library_event(event, &db);
+                }
+            },
+            Config::default(),
+        )
+        .map_err(|e| format!("Failed to create library watcher: {e}"))?;
+        watcher
+            .watch(&canonical, RecursiveMode::Recursive)
+            .map_err(|e| format!("Failed to watch {}: {e}", canonical.display()))?;
+        self.watched_paths.insert(canonical);
+        self.watchers.push(watcher);
+        Ok(())
+    }
+}
+
+fn handle_library_event(event: Event, db: &DbManager) {
+    for path in event.paths {
+        if !is_supported_audio_path(&path) {
+            continue;
+        }
+        if path.exists() {
+            let track = extract_track(&path);
+            if let Err(err) = db.save_track(&track) {
+                eprintln!("Failed to persist watched track {}: {err}", track.path);
+            }
+        } else if let Err(err) = db.delete_track(path.to_string_lossy().as_ref()) {
+            eprintln!("Failed to delete removed track {}: {err}", path.display());
+        }
+    }
+}
+
+fn extract_track(path: &Path) -> TrackInput {
     let (mut title, mut artist, mut album, duration_seconds, sample_rate) =
         read_symphonia_metadata(path);
+    let mut corrupted = false;
+    let mut art_url = None;
+
+    match read_track_metadata(path) {
+        Ok(metadata) => {
+            if title.is_none() {
+                title = metadata.title;
+            }
+            if artist.is_none() {
+                artist = metadata.artist;
+            }
+            if let Some(cover_art) = metadata.cover_art {
+                art_url = art_cache::cache_cover_art(path, &cover_art).ok().flatten();
+            }
+        }
+        Err(err) => {
+            corrupted = true;
+            eprintln!("Corrupted track detected {}: {err}", path.display());
+        }
+    }
 
     if let Ok(tag) = id3::Tag::read_from_path(path) {
         if title.is_none() {
@@ -67,7 +153,7 @@ fn extract_track(path: &Path) -> Option<TrackInput> {
         }
     }
 
-    Some(TrackInput {
+    TrackInput {
         path: path.to_string_lossy().to_string(),
         title: title.or_else(|| {
             path.file_stem()
@@ -78,7 +164,9 @@ fn extract_track(path: &Path) -> Option<TrackInput> {
         album,
         duration_seconds,
         sample_rate,
-    })
+        art_url,
+        corrupted,
+    }
 }
 
 fn read_symphonia_metadata(
@@ -134,6 +222,18 @@ fn read_symphonia_metadata(
     });
 
     (title, artist, album, duration_seconds, sample_rate)
+}
+
+fn is_supported_audio_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| {
+            matches!(
+                ext.to_ascii_lowercase().as_str(),
+                "flac" | "mp3" | "m4a" | "ogg" | "wav"
+            )
+        })
+        .unwrap_or(false)
 }
 
 fn apply_revision_metadata(

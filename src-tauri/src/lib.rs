@@ -55,6 +55,8 @@ struct LibraryTrackData {
     album: Option<String>,
     duration_seconds: Option<f32>,
     sample_rate: Option<u32>,
+    art_url: Option<String>,
+    corrupted: bool,
 }
 
 #[tauri::command]
@@ -167,7 +169,10 @@ fn get_lyrics_lines(state: tauri::State<'_, AudioState>) -> Vec<LyricsLineData> 
 
 #[tauri::command]
 fn scan_library(state: tauri::State<'_, DbManager>, path: String) -> Result<usize, String> {
-    library::scanner::scan_library_path(Path::new(&path), &state)
+    let root = Path::new(&path);
+    let scanned = library::scanner::scan_library_path(root, &state)?;
+    library::scanner::register_library_watch(root, &state)?;
+    Ok(scanned)
 }
 
 #[tauri::command]
@@ -182,6 +187,8 @@ fn get_library_tracks(state: tauri::State<'_, DbManager>) -> Result<Vec<LibraryT
             album: track.album,
             duration_seconds: track.duration_seconds,
             sample_rate: track.sample_rate,
+            art_url: track.art_url,
+            corrupted: track.corrupted,
         })
         .collect())
 }
@@ -194,6 +201,11 @@ fn play(state: tauri::State<'_, AudioState>) {
 #[tauri::command]
 fn pause(state: tauri::State<'_, AudioState>) {
     state.pause();
+}
+
+#[tauri::command]
+fn set_next_track(state: tauri::State<'_, AudioState>, path: Option<String>) {
+    state.set_next_track(path.as_deref());
 }
 
 #[tauri::command]
@@ -232,6 +244,7 @@ pub fn run() {
             load_track,
             play,
             pause,
+            set_next_track,
             seek,
             set_volume,
             get_vibe_data,

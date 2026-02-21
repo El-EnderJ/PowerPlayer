@@ -25,6 +25,9 @@ r2d2_sqlite = "0.32.0"
 rayon = "1.11.0"
 walkdir = "2.5.0"
 id3 = "1.16.4"
+notify = "6.1.1"
+sha2 = "0.10.9"
+image = { version = "0.25.5", default-features = false, features = ["jpeg", "png"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 cpal = "0.16.0"
