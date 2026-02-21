@@ -442,6 +442,7 @@ fn sanitize_q(q_factor: f32) -> f32 {
     q_factor.clamp(0.1, 18.0)
 }
 
+/// Converts dB gain into linear amplitude multiplier using 10^(dB/20).
 fn db_to_gain(db: f32) -> f32 {
     10.0_f32.powf(db / 20.0)
 }
