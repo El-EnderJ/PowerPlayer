@@ -162,7 +162,6 @@ function App() {
       const start = performance.now();
       invokeSafe<VibeData>("get_vibe_data")
         .then((vibe) => {
-          if (!vibe) return;
           const spectrumChanged = hasSignificantSpectrumChange(
             spectrumRef.current,
             vibe.spectrum

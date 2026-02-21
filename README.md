@@ -57,7 +57,6 @@ Screenshots from manual app usage are available in `docs/images`:
 - `docs/images/app-playing.png`
 - `docs/images/app-volume-adjusted.png`
 - `docs/images/app-smoke-round2.png`
-npm run tauri build
 ## Project Structure
 
 ```
