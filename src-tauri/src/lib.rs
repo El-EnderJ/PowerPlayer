@@ -1,6 +1,7 @@
 use serde::Serialize;
 use std::path::Path;
 use std::sync::Mutex;
+use tauri::Emitter;
 
 mod audio;
 mod db;
@@ -8,7 +9,9 @@ mod library;
 use audio::engine::{AudioState, AudioStats};
 use db::manager::DbManager;
 use db::search::SearchResults;
+use db::spatial_store::SpatialSceneRow;
 use library::queue::PlaybackQueue;
+use library::stems::StemSeparator;
 
 #[derive(Serialize)]
 struct EqBandData {
@@ -315,15 +318,157 @@ fn toggle_shuffle(
     Ok(())
 }
 
+// ── Spatial Audio IPC commands ─────────────────────────────────────────
+
+#[derive(Serialize)]
+struct SpatialSourceData {
+    index: usize,
+    name: String,
+    x: f32,
+    y: f32,
+    z: f32,
+    is_active: bool,
+}
+
+#[tauri::command]
+fn toggle_spatial_mode(
+    state: tauri::State<'_, AudioState>,
+    enabled: bool,
+) -> Result<(), String> {
+    state.set_spatial_enabled(enabled)
+}
+
+#[tauri::command]
+fn update_source_position(
+    state: tauri::State<'_, AudioState>,
+    source_id: usize,
+    x: f32,
+    y: f32,
+    z: f32,
+) -> Result<(), String> {
+    state.set_spatial_source_position(source_id, x, y, z)
+}
+
+#[tauri::command]
+fn set_room_properties(
+    state: tauri::State<'_, AudioState>,
+    width: f32,
+    length: f32,
+    height: f32,
+    damping: f32,
+) -> Result<(), String> {
+    state.set_spatial_room_size(width, length, height)?;
+    state.set_spatial_damping(damping)
+}
+
+#[tauri::command]
+fn get_spatial_sources(
+    state: tauri::State<'_, AudioState>,
+) -> Result<Vec<SpatialSourceData>, String> {
+    let positions = state.get_spatial_source_positions()?;
+    let names = audio::dsp::spatial::SOURCE_NAMES;
+    Ok(positions
+        .into_iter()
+        .enumerate()
+        .map(|(i, (x, y, z, active))| SpatialSourceData {
+            index: i,
+            name: names.get(i).unwrap_or(&"unknown").to_string(),
+            x,
+            y,
+            z,
+            is_active: active,
+        })
+        .collect())
+}
+
+#[tauri::command]
+fn auto_orchestra(state: tauri::State<'_, AudioState>) -> Result<(), String> {
+    state.spatial_auto_orchestra()
+}
+
+// ── Spatial Scene Persistence IPC ──────────────────────────────────────
+
+#[tauri::command]
+fn save_spatial_scene(
+    audio: tauri::State<'_, AudioState>,
+    db: tauri::State<'_, DbManager>,
+    track_id: String,
+) -> Result<(), String> {
+    let positions = audio.get_spatial_source_positions()?;
+    let names = audio::dsp::spatial::SOURCE_NAMES;
+    for (i, (x, y, z, active)) in positions.iter().enumerate() {
+        let name = names.get(i).unwrap_or(&"unknown");
+        db.save_spatial_scene(&track_id, name, *x, *y, *z, *active)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn load_spatial_scene(
+    audio: tauri::State<'_, AudioState>,
+    db: tauri::State<'_, DbManager>,
+    track_id: String,
+) -> Result<Vec<SpatialSceneRow>, String> {
+    let rows = db.load_spatial_scene(&track_id)?;
+    let names = audio::dsp::spatial::SOURCE_NAMES;
+    for row in &rows {
+        if let Some(idx) = names.iter().position(|&n| n == row.source_name) {
+            audio.set_spatial_source_position(idx, row.x, row.y, row.z)?;
+            audio.set_spatial_source_active(idx, row.is_active)?;
+        }
+    }
+    Ok(rows)
+}
+
+// ── Stem Separation IPC ────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct StemPathsData {
+    vocals: String,
+    drums: String,
+    bass: String,
+    other: String,
+}
+
+#[tauri::command]
+fn analyze_spatial_stems(
+    app: tauri::AppHandle,
+    stem_sep: tauri::State<'_, Mutex<StemSeparator>>,
+    track_id: String,
+) -> Result<StemPathsData, String> {
+    let separator = stem_sep
+        .lock()
+        .map_err(|e| format!("Stem separator lock error: {e}"))?;
+
+    let paths = separator.analyze_spatial_stems(&track_id, |progress| {
+        let _ = app.emit("stems-progress", &progress);
+    })?;
+
+    Ok(StemPathsData {
+        vocals: paths.vocals.to_string_lossy().to_string(),
+        drums: paths.drums.to_string_lossy().to_string(),
+        bass: paths.bass.to_string_lossy().to_string(),
+        other: paths.other.to_string_lossy().to_string(),
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let db = DbManager::new("powerplayer.db").expect("failed to initialize SQLite manager");
     db.initialize_fts().expect("failed to initialize FTS5 search");
+    db.initialize_spatial_schema().expect("failed to initialize spatial schema");
+
+    let stems_cache = dirs::cache_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from(".cache"))
+        .join("powerplayer")
+        .join("stems");
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AudioState::new())
         .manage(db)
         .manage(Mutex::new(PlaybackQueue::new()))
+        .manage(Mutex::new(StemSeparator::new(stems_cache)))
         .invoke_handler(tauri::generate_handler![
             greet,
             update_eq_band,
@@ -349,6 +494,14 @@ pub fn run() {
             load_reverb_preset,
             fast_search,
             toggle_shuffle,
+            toggle_spatial_mode,
+            update_source_position,
+            set_room_properties,
+            get_spatial_sources,
+            auto_orchestra,
+            save_spatial_scene,
+            load_spatial_scene,
+            analyze_spatial_stems,
         ])
         .run(tauri::generate_context!())
         .expect("error while running PowerPlayer");
