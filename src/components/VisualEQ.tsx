@@ -38,7 +38,11 @@ function yToGain(y: number, height: number): number {
   return MAX_GAIN - (y / height) * (MAX_GAIN - MIN_GAIN);
 }
 
-export default function VisualEQ() {
+interface VisualEQProps {
+  spectrum?: number[];
+}
+
+export default function VisualEQ({ spectrum = [] }: VisualEQProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [bands, setBands] = useState<EqBand[]>([]);
   const [response, setResponse] = useState<FrequencyPoint[]>([]);
@@ -215,6 +219,20 @@ export default function VisualEQ() {
         ctx.shadowBlur = 0;
       }
 
+      if (spectrum.length > 0) {
+        const bins = Math.min(64, spectrum.length);
+        const barWidth = w / bins;
+        for (let i = 0; i < bins; i++) {
+          const db = spectrum[i];
+          const normalized = Math.max(0, Math.min(1, (db + 100) / 100));
+          const barHeight = normalized * h * 0.25;
+          const x = i * barWidth;
+          const y = h - barHeight;
+          ctx.fillStyle = "rgba(56,189,248,0.35)";
+          ctx.fillRect(x, y, barWidth * 0.8, barHeight);
+        }
+      }
+
       // Draw band control points
       for (const band of bands) {
         const bx = freqToX(band.frequency, w);
@@ -244,7 +262,7 @@ export default function VisualEQ() {
 
     animFrameRef.current = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(animFrameRef.current);
-  }, [bands, response, dragIndex]);
+  }, [bands, response, dragIndex, spectrum]);
 
   // Mouse interaction handlers
   const handleMouseDown = useCallback(

@@ -1,7 +1,4 @@
-use std::{
-    fs::File,
-    path::Path,
-};
+use std::{fs::File, path::Path};
 
 use symphonia::core::{
     audio::SampleBuffer,
@@ -9,7 +6,7 @@ use symphonia::core::{
     errors::Error,
     formats::FormatOptions,
     io::MediaSourceStream,
-    meta::MetadataOptions,
+    meta::{MetadataOptions, MetadataRevision, StandardTagKey},
     probe::Hint,
 };
 
@@ -18,6 +15,102 @@ pub struct DecodedTrack {
     pub sample_rate: u32,
     pub channels: u16,
     pub samples: Vec<f32>,
+}
+
+#[derive(Clone, Debug)]
+pub struct CoverArt {
+    pub media_type: String,
+    pub data: Vec<u8>,
+}
+
+#[derive(Clone, Debug)]
+pub struct TrackMetadata {
+    pub artist: Option<String>,
+    pub title: Option<String>,
+    pub cover_art: Option<CoverArt>,
+    pub duration_seconds: Option<f32>,
+}
+
+pub fn read_track_metadata(path: &Path) -> Result<TrackMetadata, String> {
+    let file = File::open(path).map_err(|e| format!("Cannot open file {}: {e}", path.display()))?;
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+
+    let mut hint = Hint::new();
+    if let Some(ext) = path.extension().and_then(|ext| ext.to_str()) {
+        hint.with_extension(ext);
+    }
+
+    let mut probed = symphonia::default::get_probe()
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
+        .map_err(|e| format!("Format probe failed: {e}"))?;
+
+    let mut metadata = TrackMetadata {
+        artist: None,
+        title: path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .map(std::string::ToString::to_string),
+        cover_art: None,
+        duration_seconds: None,
+    };
+
+    if let Some(mut pre_metadata) = probed.metadata.get() {
+        if let Some(revision) = pre_metadata.current() {
+            apply_metadata_revision(revision, &mut metadata);
+        }
+    }
+
+    let format = &mut probed.format;
+    if let Some(revision) = format.metadata().current() {
+        apply_metadata_revision(revision, &mut metadata);
+    }
+
+    if let Some(track) = format.default_track() {
+        if let (Some(sample_rate), Some(n_frames)) =
+            (track.codec_params.sample_rate, track.codec_params.n_frames)
+        {
+            if sample_rate > 0 {
+                metadata.duration_seconds = Some(n_frames as f32 / sample_rate as f32);
+            }
+        }
+    }
+
+    Ok(metadata)
+}
+
+fn apply_metadata_revision(revision: &MetadataRevision, metadata: &mut TrackMetadata) {
+    for tag in revision.tags() {
+        if metadata.artist.is_none() {
+            if matches!(
+                tag.std_key,
+                Some(
+                    StandardTagKey::Artist
+                        | StandardTagKey::AlbumArtist
+                        | StandardTagKey::Performer
+                )
+            ) {
+                metadata.artist = Some(tag.value.to_string());
+            }
+        }
+
+        if metadata.title.is_none() && matches!(tag.std_key, Some(StandardTagKey::TrackTitle)) {
+            metadata.title = Some(tag.value.to_string());
+        }
+    }
+
+    if metadata.cover_art.is_none() {
+        if let Some(visual) = revision.visuals().first() {
+            metadata.cover_art = Some(CoverArt {
+                media_type: visual.media_type.clone(),
+                data: visual.data.to_vec(),
+            });
+        }
+    }
 }
 
 pub fn decode_file(path: &Path) -> Result<DecodedTrack, String> {
@@ -91,7 +184,12 @@ pub fn decode_file(path: &Path) -> Result<DecodedTrack, String> {
 /// Minimal-cost linear interpolation resampler used only when device and track sample-rates differ.
 /// It is intentionally simple for low-latency startup and predictable memory behavior, but quality is
 /// lower than dedicated sinc-based resamplers; this is acceptable here as a fallback path.
-pub fn resample_linear(interleaved: &[f32], in_rate: u32, out_rate: u32, channels: usize) -> Vec<f32> {
+pub fn resample_linear(
+    interleaved: &[f32],
+    in_rate: u32,
+    out_rate: u32,
+    channels: usize,
+) -> Vec<f32> {
     if in_rate == out_rate || channels == 0 || interleaved.is_empty() {
         return interleaved.to_vec();
     }
