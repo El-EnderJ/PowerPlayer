@@ -243,7 +243,7 @@ fn center_cancel_fallback(
     let mut other = Vec::with_capacity(samples.len());
 
     // Simple single-pole low-pass for bass extraction
-    let bass_alpha = 0.02_f32; // ~160 Hz at 44.1 kHz
+    let bass_alpha = 0.02_f32; // ~140 Hz at 44.1 kHz (f_c ≈ alpha * sr / 2π)
     let mut bass_state_l = 0.0_f32;
     let mut bass_state_r = 0.0_f32;
 

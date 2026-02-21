@@ -333,6 +333,7 @@ impl SpatialRoomNode {
 
             // ── ITD (inter-aural time difference) ──
             // Woodworth approximation: ITD = (r/c) * (sin(θ) + θ)  for |θ| ≤ π/2
+            // Clamp azimuth to ±90° where the approximation is valid.
             let abs_az = azimuth.abs().min(std::f32::consts::FRAC_PI_2);
             let itd_seconds = (head_radius / SPEED_OF_SOUND) * (abs_az.sin() + abs_az);
             let itd_samples = (itd_seconds * sr).round() as usize;
