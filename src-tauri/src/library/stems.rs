@@ -45,6 +45,8 @@ pub struct StemSeparator {
     prefer_gpu: bool,
 }
 
+const MAX_STEM_CACHE_TRACKS: usize = 128;
+
 /// Progress of an ongoing stem analysis.
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct StemProgress {
@@ -77,6 +79,47 @@ impl StemSeparator {
     /// Returns the expected stem file path inside the cache directory.
     fn stem_path(dir: &Path, kind: StemKind) -> PathBuf {
         dir.join(format!("{}.wav", kind.as_str()))
+    }
+
+    fn original_track_paths(track_path: &str) -> StemPaths {
+        let original = PathBuf::from(track_path);
+        StemPaths {
+            vocals: original.clone(),
+            drums: original.clone(),
+            bass: original.clone(),
+            other: original,
+        }
+    }
+
+    fn prune_stem_cache(&self) {
+        let Ok(entries) = std::fs::read_dir(&self.cache_dir) else {
+            return;
+        };
+
+        let mut dirs = entries
+            .filter_map(Result::ok)
+            .filter_map(|entry| {
+                let path = entry.path();
+                if !path.is_dir() {
+                    return None;
+                }
+                let modified = entry
+                    .metadata()
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                Some((path, modified))
+            })
+            .collect::<Vec<_>>();
+
+        if dirs.len() <= MAX_STEM_CACHE_TRACKS {
+            return;
+        }
+
+        dirs.sort_by_key(|(_, modified)| *modified);
+        for (path, _) in dirs.iter().take(dirs.len() - MAX_STEM_CACHE_TRACKS) {
+            let _ = std::fs::remove_dir_all(path);
+        }
     }
 
     /// Check whether all four stems are already cached for this track.
@@ -121,7 +164,10 @@ impl StemSeparator {
         track_path: &str,
         progress_cb: impl Fn(StemProgress),
     ) -> Result<StemPaths, String> {
+        self.prune_stem_cache();
+
         // Step A: cache check
+        let dir = self.track_cache_dir(track_path);
         if let Some(paths) = self.cached_paths(track_path) {
             progress_cb(StemProgress {
                 track_id: track_path.to_string(),
@@ -131,7 +177,20 @@ impl StemSeparator {
             return Ok(paths);
         }
 
-        let dir = self.track_cache_dir(track_path);
+        let existing_stems = StemKind::all()
+            .iter()
+            .filter(|kind| Self::stem_path(&dir, **kind).exists())
+            .count();
+        if existing_stems > 0 {
+            let _ = std::fs::remove_dir_all(&dir);
+            progress_cb(StemProgress {
+                track_id: track_path.to_string(),
+                percent: 1.0,
+                stage: "Incomplete stem cache detected, falling back to original track (no separation)".to_string(),
+            });
+            return Ok(Self::original_track_paths(track_path));
+        }
+
         std::fs::create_dir_all(&dir)
             .map_err(|e| format!("Failed to create stem cache dir: {e}"))?;
 
@@ -151,15 +210,17 @@ impl StemSeparator {
         });
 
         // Step C: Attempt ONNX model, fallback to center-cancel
-        let stem_buffers = match self.run_onnx_separation(&samples, sample_rate, channels, |p| {
-            progress_cb(StemProgress {
-                track_id: track_path.to_string(),
-                percent: 0.15 + p * 0.7,
-                stage: "AI processing...".to_string(),
-            });
-        }) {
-            Ok(buffers) => buffers,
-            Err(_) => {
+        let stem_buffers = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.run_onnx_separation(&samples, sample_rate, channels, |p| {
+                progress_cb(StemProgress {
+                    track_id: track_path.to_string(),
+                    percent: 0.15 + p * 0.7,
+                    stage: "AI processing...".to_string(),
+                });
+            })
+        })) {
+            Ok(Ok(buffers)) => buffers,
+            Ok(Err(_)) | Err(_) => {
                 progress_cb(StemProgress {
                     track_id: track_path.to_string(),
                     percent: 0.2,
@@ -228,10 +289,7 @@ impl StemSeparator {
 /// while the side channel captures panned instruments.
 /// Bass is extracted with a low-pass filter on the mid signal.
 /// This is a best-effort last-resort when no ONNX model is available.
-fn center_cancel_fallback(
-    samples: &[f32],
-    channels: u16,
-) -> Result<[Vec<f32>; 4], String> {
+fn center_cancel_fallback(samples: &[f32], channels: u16) -> Result<[Vec<f32>; 4], String> {
     if channels < 2 {
         return Err("Center cancellation requires stereo input".to_string());
     }
@@ -302,8 +360,8 @@ fn load_audio_f32(path: &str) -> Result<(Vec<f32>, u32, u16), String> {
     use symphonia::core::meta::MetadataOptions;
     use symphonia::core::probe::Hint;
 
-    let file = std::fs::File::open(path)
-        .map_err(|e| format!("Failed to open audio file {path}: {e}"))?;
+    let file =
+        std::fs::File::open(path).map_err(|e| format!("Failed to open audio file {path}: {e}"))?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
     let mut hint = Hint::new();
@@ -312,7 +370,12 @@ fn load_audio_f32(path: &str) -> Result<(Vec<f32>, u32, u16), String> {
     }
 
     let probed = symphonia::default::get_probe()
-        .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
         .map_err(|e| format!("Failed to probe audio: {e}"))?;
 
     let mut format = probed.format;
@@ -320,10 +383,7 @@ fn load_audio_f32(path: &str) -> Result<(Vec<f32>, u32, u16), String> {
         .default_track()
         .ok_or("No default audio track found")?;
     let track_id = track.id;
-    let sample_rate = track
-        .codec_params
-        .sample_rate
-        .unwrap_or(44100);
+    let sample_rate = track.codec_params.sample_rate.unwrap_or(44100);
     let channels = track
         .codec_params
         .channels
@@ -437,6 +497,28 @@ mod tests {
         let sep = StemSeparator::new(temp_cache_dir());
         assert!(!sep.is_cached("/fake/track.flac"));
         assert!(sep.cached_paths("/fake/track.flac").is_none());
+    }
+
+    #[test]
+    fn incomplete_cache_falls_back_to_original_track() {
+        let cache_dir = temp_cache_dir();
+        let sep = StemSeparator::new(&cache_dir);
+        let track = "/music/original.flac";
+        let track_cache = sep.track_cache_dir(track);
+        std::fs::create_dir_all(&track_cache).expect("create track cache");
+        for kind in [StemKind::Vocals, StemKind::Drums, StemKind::Bass] {
+            std::fs::write(StemSeparator::stem_path(&track_cache, kind), b"wav")
+                .expect("write partial stem");
+        }
+
+        let paths = sep
+            .analyze_spatial_stems(track, |_| {})
+            .expect("must use original track fallback");
+        let original = PathBuf::from(track);
+        assert_eq!(paths.vocals, original.clone());
+        assert_eq!(paths.drums, original.clone());
+        assert_eq!(paths.bass, original.clone());
+        assert_eq!(paths.other, original);
     }
 
     #[test]
