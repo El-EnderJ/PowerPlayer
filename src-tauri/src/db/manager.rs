@@ -60,6 +60,7 @@ impl DbManager {
         )
         .map_err(|e| format!("Failed to save track {}: {e}", track.path))?;
 
+        // Empty/blank album names are intentionally skipped to keep the albums table normalized.
         if let Some(album) = track.album.as_ref().filter(|name| !name.trim().is_empty()) {
             conn.execute(
                 "INSERT INTO albums (name, artist) VALUES (?1, ?2)

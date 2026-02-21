@@ -10,6 +10,7 @@ const TEN_BAND_FREQUENCIES: [f32; 10] = [
 ];
 
 const FLAT_GAINS: [f32; 10] = [0.0; 10];
+// Baseline 10-band compensation derived from AutoEQ-style Harman-target correction profile.
 const SONY_WH_1000XM4_GAINS: [f32; 10] = [-2.4, -1.6, -0.8, 0.2, 1.1, 1.8, 2.2, 1.5, 0.4, -0.9];
 
 fn build_profile(gains: [f32; 10]) -> Vec<EqBandConfig> {

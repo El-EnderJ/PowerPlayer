@@ -17,8 +17,13 @@ pub fn scan_library_path(root: &Path, db: &DbManager) -> Result<usize, String> {
 
     files.par_iter().for_each(|path| {
         if let Some(track) = extract_track(path) {
-            if db.save_track(&track).is_ok() {
-                saved_count.fetch_add(1, Ordering::Relaxed);
+            match db.save_track(&track) {
+                Ok(_) => {
+                    saved_count.fetch_add(1, Ordering::Relaxed);
+                }
+                Err(err) => {
+                    eprintln!("Failed to persist track {}: {err}", track.path);
+                }
             }
         }
     });
