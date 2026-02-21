@@ -147,6 +147,7 @@ pub struct DspChain {
     user_eq: ParametricEQ,
     balance: super::tone::BalanceNode,
     expansion: super::tone::StereoExpansionNode,
+    spatial: super::spatial::SpatialRoomNode,
     reverb: super::reverb::ReverbNode,
     limiter: SoftLimiter,
 }
@@ -159,6 +160,7 @@ impl DspChain {
             user_eq: ParametricEQ::new(10, sample_rate),
             balance: super::tone::BalanceNode::new(),
             expansion: super::tone::StereoExpansionNode::new(sample_rate),
+            spatial: super::spatial::SpatialRoomNode::new(sample_rate),
             reverb: super::reverb::ReverbNode::new(sample_rate),
             limiter: SoftLimiter::new(),
         }
@@ -169,10 +171,11 @@ impl DspChain {
         self.auto_eq.set_sample_rate(sample_rate);
         self.user_eq.set_sample_rate(sample_rate);
         self.expansion.set_sample_rate(sample_rate);
+        self.spatial.set_sample_rate(sample_rate);
         self.reverb.set_sample_rate(sample_rate);
     }
 
-    /// Order: PreAmp → Tone → AutoEQ → UserEQ → Balance → StereoExpansion → Reverb → Limiter
+    /// Order: PreAmp → Tone → AutoEQ → UserEQ → Balance → StereoExpansion → Spatial → Reverb → Limiter
     pub fn process_stereo_frame(&mut self, left: f32, right: f32, preamp_db: f32) -> (f32, f32) {
         let preamp = db_to_gain(preamp_db);
         let (left, right) = (left * preamp, right * preamp);
@@ -181,6 +184,7 @@ impl DspChain {
         let (left, right) = self.user_eq.process_stereo_frame(left, right);
         let (left, right) = self.balance.process_stereo_frame(left, right);
         let (left, right) = self.expansion.process_stereo_frame(left, right);
+        let (left, right) = self.spatial.process_stereo_frame(left, right);
         let (left, right) = self.reverb.process_stereo_frame(left, right);
         (
             self.limiter.process_sample(left),
@@ -228,6 +232,14 @@ impl DspChain {
 
     pub fn reverb(&self) -> &super::reverb::ReverbNode {
         &self.reverb
+    }
+
+    pub fn spatial(&self) -> &super::spatial::SpatialRoomNode {
+        &self.spatial
+    }
+
+    pub fn spatial_mut(&mut self) -> &mut super::spatial::SpatialRoomNode {
+        &mut self.spatial
     }
 }
 

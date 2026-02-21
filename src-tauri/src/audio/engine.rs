@@ -566,6 +566,65 @@ impl AudioState {
         Ok(())
     }
 
+    // ── Spatial audio controls ─────────────────────────────────────────
+
+    pub fn set_spatial_enabled(&self, enabled: bool) -> Result<(), String> {
+        let chain = self.inner.dsp_chain.lock().map_err(lock_err)?;
+        chain.spatial().set_enabled(enabled);
+        Ok(())
+    }
+
+    pub fn is_spatial_enabled(&self) -> Result<bool, String> {
+        let chain = self.inner.dsp_chain.lock().map_err(lock_err)?;
+        Ok(chain.spatial().is_enabled())
+    }
+
+    pub fn set_spatial_room_size(
+        &self,
+        width: f32,
+        length: f32,
+        height: f32,
+    ) -> Result<(), String> {
+        let chain = self.inner.dsp_chain.lock().map_err(lock_err)?;
+        chain.spatial().set_room_size(width, length, height);
+        Ok(())
+    }
+
+    pub fn set_spatial_damping(&self, damping: f32) -> Result<(), String> {
+        let chain = self.inner.dsp_chain.lock().map_err(lock_err)?;
+        chain.spatial().set_damping(damping);
+        Ok(())
+    }
+
+    pub fn set_spatial_source_position(
+        &self,
+        index: usize,
+        x: f32,
+        y: f32,
+        z: f32,
+    ) -> Result<(), String> {
+        let chain = self.inner.dsp_chain.lock().map_err(lock_err)?;
+        chain.spatial().set_source_position(index, x, y, z);
+        Ok(())
+    }
+
+    pub fn set_spatial_source_active(&self, index: usize, active: bool) -> Result<(), String> {
+        let chain = self.inner.dsp_chain.lock().map_err(lock_err)?;
+        chain.spatial().set_source_active(index, active);
+        Ok(())
+    }
+
+    pub fn get_spatial_source_positions(&self) -> Result<Vec<(f32, f32, f32, bool)>, String> {
+        let chain = self.inner.dsp_chain.lock().map_err(lock_err)?;
+        Ok(chain.spatial().source_positions())
+    }
+
+    pub fn spatial_auto_orchestra(&self) -> Result<(), String> {
+        let chain = self.inner.dsp_chain.lock().map_err(lock_err)?;
+        chain.spatial().auto_orchestra();
+        Ok(())
+    }
+
     /// Returns current EQ band parameters as Vec of (frequency, gain_db, q_factor).
     pub fn get_eq_bands(&self) -> Result<Vec<(f32, f32, f32)>, String> {
         let chain = self.inner.dsp_chain.lock().map_err(lock_err)?;
