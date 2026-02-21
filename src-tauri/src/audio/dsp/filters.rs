@@ -111,6 +111,97 @@ impl Default for SoftLimiter {
     }
 }
 
+pub struct StereoWidener {
+    amount_bits: AtomicU32,
+}
+
+impl StereoWidener {
+    pub fn new() -> Self {
+        Self {
+            amount_bits: AtomicU32::new(0.2_f32.to_bits()),
+        }
+    }
+
+    pub fn set_amount(&self, amount: f32) {
+        self.amount_bits
+            .store(amount.clamp(0.0, 1.0).to_bits(), Ordering::SeqCst);
+    }
+
+    pub fn process_stereo_frame(&self, left: f32, right: f32) -> (f32, f32) {
+        let amount = f32::from_bits(self.amount_bits.load(Ordering::Relaxed));
+        let mid = (left + right) * 0.5;
+        let side = (left - right) * 0.5 * (1.0 + amount);
+        (mid + side, mid - side)
+    }
+}
+
+impl Default for StereoWidener {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub struct DspChain {
+    auto_eq: ParametricEQ,
+    user_eq: ParametricEQ,
+    widener: StereoWidener,
+    limiter: SoftLimiter,
+}
+
+impl DspChain {
+    pub fn new(sample_rate: f32) -> Self {
+        Self {
+            auto_eq: ParametricEQ::new(10, sample_rate),
+            user_eq: ParametricEQ::new(10, sample_rate),
+            widener: StereoWidener::new(),
+            limiter: SoftLimiter::new(),
+        }
+    }
+
+    pub fn set_sample_rate(&mut self, sample_rate: f32) {
+        self.auto_eq.set_sample_rate(sample_rate);
+        self.user_eq.set_sample_rate(sample_rate);
+    }
+
+    pub fn process_stereo_frame(&mut self, left: f32, right: f32, preamp_db: f32) -> (f32, f32) {
+        let preamp = db_to_gain(preamp_db);
+        let (left, right) = (left * preamp, right * preamp);
+        let (left, right) = self.auto_eq.process_stereo_frame(left, right);
+        let (left, right) = self.user_eq.process_stereo_frame(left, right);
+        let (left, right) = self.widener.process_stereo_frame(left, right);
+        (
+            self.limiter.process_sample(left),
+            self.limiter.process_sample(right),
+        )
+    }
+
+    pub fn update_user_eq_band(
+        &self,
+        index: usize,
+        frequency: f32,
+        gain_db: f32,
+        q_factor: f32,
+    ) -> Result<(), String> {
+        self.user_eq
+            .update_band(index, frequency, gain_db, q_factor)
+    }
+
+    pub fn user_eq_bands(&self) -> Vec<(f32, f32, f32)> {
+        self.user_eq.get_bands()
+    }
+
+    pub fn user_eq_response(&self, num_points: usize) -> Vec<(f32, f32)> {
+        self.user_eq.compute_frequency_response(num_points)
+    }
+
+    pub fn set_autoeq_profile(&self, profile: &[(f32, f32, f32)]) -> Result<(), String> {
+        for (idx, (freq, gain_db, q)) in profile.iter().copied().enumerate() {
+            self.auto_eq.update_band(idx, freq, gain_db, q)?;
+        }
+        Ok(())
+    }
+}
+
 struct EqBand {
     filter_type: FilterType,
     frequency_bits: AtomicU32,
@@ -351,6 +442,7 @@ fn sanitize_q(q_factor: f32) -> f32 {
     q_factor.clamp(0.1, 18.0)
 }
 
+/// Converts dB gain into linear amplitude multiplier using 10^(dB/20).
 fn db_to_gain(db: f32) -> f32 {
     10.0_f32.powf(db / 20.0)
 }
@@ -471,7 +563,7 @@ fn low_pass_coefficients(sample_rate: f32, frequency: f32, q_factor: f32) -> Biq
 
 #[cfg(test)]
 mod tests {
-    use super::{BiquadFilter, ParametricEQ, SoftLimiter};
+    use super::{BiquadFilter, ParametricEQ, SoftLimiter, StereoWidener};
 
     #[test]
     fn biquad_stays_finite_after_configuration() {
@@ -547,5 +639,12 @@ mod tests {
             near_1k.iter().any(|(_, db)| *db > 5.0),
             "12 dB boost at 1kHz should produce a positive peak in response"
         );
+    }
+
+    #[test]
+    fn stereo_widener_increases_channel_difference() {
+        let widener = StereoWidener::new();
+        let (l, r) = widener.process_stereo_frame(0.8, 0.2);
+        assert!((l - r).abs() > (0.8_f32 - 0.2_f32).abs());
     }
 }

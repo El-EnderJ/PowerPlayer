@@ -1,7 +1,5 @@
 use super::dsp::fft::compute_spectrum_mono;
-use super::dsp::filters::ParametricEQ;
-#[cfg(target_os = "windows")]
-use super::dsp::filters::SoftLimiter;
+use super::dsp::{autoeq::EqBandConfig, filters::DspChain};
 use super::lyrics::{load_lyrics_for_track, LyricsLine};
 use serde::Serialize;
 use std::collections::VecDeque;
@@ -25,17 +23,19 @@ use cpal::{
 };
 #[cfg(target_os = "windows")]
 use ringbuf::{
-    traits::{Consumer as _, Producer as _, Split},
+    traits::{Consumer as _, Observer as _, Producer as _, Split},
     HeapRb,
 };
 
 #[cfg(target_os = "windows")]
-use super::decoder::{decode_file, resample_linear, DecodedTrack};
+use super::decoder::{decode_file, resample_hq, resample_linear, DecodedTrack};
 
 const STATE_PAUSED: u8 = 0;
 const STATE_PLAYING: u8 = 1;
 const NO_ACTIVE_LYRIC: u32 = u32::MAX;
 const LYRICS_POLL_INTERVAL_MS: u64 = 40;
+#[cfg(target_os = "windows")]
+const STREAM_FADE_OUT_MS: u32 = 12;
 /// Sample history used by the visualizer FFT.
 /// 4096 mono samples balance frequency detail while keeping visual updates responsive.
 const VIBE_WINDOW_SAMPLES: usize = 4096;
@@ -59,12 +59,26 @@ pub struct LyricsEventPayload {
     pub text: Option<String>,
 }
 
+#[derive(Clone, Serialize)]
+pub struct AudioStats {
+    pub device: String,
+    pub stream_latency_ms: f32,
+    pub output_sample_rate_hz: u32,
+    pub file_sample_rate_hz: u32,
+    pub ring_buffer_capacity_bytes: u32,
+    pub ring_buffer_used_bytes: u32,
+}
+
 struct AudioEngine {
     is_playing: AtomicU8,
     should_stop: AtomicBool,
     volume_bits: AtomicU32,
     preamp_db_bits: AtomicU32,
     output_rate_hz: AtomicU32,
+    file_rate_hz: AtomicU32,
+    stream_latency_ms_bits: AtomicU32,
+    ring_capacity_bytes: AtomicU32,
+    ring_used_bytes: AtomicU32,
     seek_frame: AtomicU32,
     current_frame: AtomicU32,
     track_duration_bits: AtomicU32,
@@ -74,18 +88,21 @@ struct AudioEngine {
     active_lyric_index: AtomicU32,
     lookahead_started: AtomicBool,
     lookahead_completed: AtomicBool,
-    eq: Mutex<ParametricEQ>,
+    dsp_chain: Mutex<DspChain>,
     next_track: Mutex<Option<PathBuf>>,
     #[cfg(target_os = "windows")]
     preloaded_next_track: Mutex<Option<DecodedTrack>>,
     #[cfg(target_os = "windows")]
-    limiter: SoftLimiter,
-    #[cfg(target_os = "windows")]
     stream: Mutex<Option<Stream>>,
+    #[cfg(target_os = "windows")]
+    fade_out_total_samples: AtomicU32,
+    #[cfg(target_os = "windows")]
+    fade_out_remaining_samples: AtomicU32,
     decoder_thread: Mutex<Option<thread::JoinHandle<()>>>,
     lyric_monitor_thread: Mutex<Option<thread::JoinHandle<()>>>,
     #[cfg(target_os = "windows")]
     loaded_path: Mutex<Option<PathBuf>>,
+    output_device_name: Mutex<String>,
 }
 
 impl AudioState {
@@ -97,6 +114,10 @@ impl AudioState {
                 volume_bits: AtomicU32::new(1.0_f32.to_bits()),
                 preamp_db_bits: AtomicU32::new(0.0_f32.to_bits()),
                 output_rate_hz: AtomicU32::new(48_000),
+                file_rate_hz: AtomicU32::new(48_000),
+                stream_latency_ms_bits: AtomicU32::new(0.0_f32.to_bits()),
+                ring_capacity_bytes: AtomicU32::new(0),
+                ring_used_bytes: AtomicU32::new(0),
                 seek_frame: AtomicU32::new(0),
                 current_frame: AtomicU32::new(0),
                 track_duration_bits: AtomicU32::new(0.0_f32.to_bits()),
@@ -106,30 +127,55 @@ impl AudioState {
                 active_lyric_index: AtomicU32::new(NO_ACTIVE_LYRIC),
                 lookahead_started: AtomicBool::new(false),
                 lookahead_completed: AtomicBool::new(false),
-                eq: Mutex::new(ParametricEQ::new(10, 48_000.0)),
+                dsp_chain: Mutex::new(DspChain::new(48_000.0)),
                 next_track: Mutex::new(None),
                 #[cfg(target_os = "windows")]
                 preloaded_next_track: Mutex::new(None),
                 #[cfg(target_os = "windows")]
-                limiter: SoftLimiter::new(),
-                #[cfg(target_os = "windows")]
                 stream: Mutex::new(None),
+                #[cfg(target_os = "windows")]
+                fade_out_total_samples: AtomicU32::new(0),
+                #[cfg(target_os = "windows")]
+                fade_out_remaining_samples: AtomicU32::new(0),
                 decoder_thread: Mutex::new(None),
                 lyric_monitor_thread: Mutex::new(None),
                 #[cfg(target_os = "windows")]
                 loaded_path: Mutex::new(None),
+                output_device_name: Mutex::new("Unavailable".to_string()),
             }),
         }
     }
 
     #[cfg(target_os = "windows")]
     pub fn load_track(&self, path: impl AsRef<Path>) -> Result<(), String> {
+        if self
+            .inner
+            .stream
+            .lock()
+            .map_err(lock_err)?
+            .as_ref()
+            .is_some()
+        {
+            let fade_samples =
+                ((self.inner.output_rate_hz.load(Ordering::SeqCst) * STREAM_FADE_OUT_MS) / 1000)
+                    .max(1);
+            self.inner
+                .fade_out_total_samples
+                .store(fade_samples, Ordering::SeqCst);
+            self.inner
+                .fade_out_remaining_samples
+                .store(fade_samples, Ordering::SeqCst);
+            thread::sleep(std::time::Duration::from_millis(STREAM_FADE_OUT_MS as u64));
+        }
+
         self.inner.should_stop.store(true, Ordering::SeqCst);
         self.inner.is_playing.store(STATE_PAUSED, Ordering::SeqCst);
         self.inner.seek_frame.store(0, Ordering::SeqCst);
         self.inner.current_frame.store(0, Ordering::SeqCst);
         self.inner.lookahead_started.store(false, Ordering::SeqCst);
-        self.inner.lookahead_completed.store(false, Ordering::SeqCst);
+        self.inner
+            .lookahead_completed
+            .store(false, Ordering::SeqCst);
         self.inner
             .active_lyric_index
             .store(NO_ACTIVE_LYRIC, Ordering::SeqCst);
@@ -158,6 +204,11 @@ impl AudioState {
         let device = host
             .default_output_device()
             .ok_or_else(|| "No default output device available".to_string())?;
+        if let Ok(mut name) = self.inner.output_device_name.lock() {
+            *name = device
+                .name()
+                .unwrap_or_else(|_| "Unknown output device".to_string());
+        }
 
         let (stream_config, sample_format, exact_rate) = select_stream_config(&device, &decoded)?;
         #[cfg(target_os = "windows")]
@@ -176,19 +227,29 @@ impl AudioState {
         let output_channels = stream_config.channels as usize;
         let output_rate = stream_config.sample_rate.0;
         self.inner
+            .file_rate_hz
+            .store(decoded.sample_rate, Ordering::SeqCst);
+        self.inner
             .output_rate_hz
             .store(output_rate, Ordering::SeqCst);
-        if let Ok(mut eq) = self.inner.eq.lock() {
-            eq.set_sample_rate(output_rate as f32);
+        self.inner.stream_latency_ms_bits.store(
+            ((RING_BUFFER_FRAMES as f32 / output_rate.max(1) as f32) * 1000.0).to_bits(),
+            Ordering::SeqCst,
+        );
+        if let Ok(mut chain) = self.inner.dsp_chain.lock() {
+            chain.set_sample_rate(output_rate as f32);
         }
 
         let mut pcm = decoded.samples;
         if decoded.sample_rate != output_rate {
             warn!(
-                "Device sample-rate {} Hz differs from track {} Hz; applying linear resampling before playback.",
+                "Device sample-rate {} Hz differs from track {} Hz; applying high-quality resampling before playback.",
                 output_rate, decoded.sample_rate
             );
-            pcm = resample_linear(&pcm, decoded.sample_rate, output_rate, source_channels);
+            pcm = resample_hq(&pcm, decoded.sample_rate, output_rate, source_channels)
+                .unwrap_or_else(|_| {
+                    resample_linear(&pcm, decoded.sample_rate, output_rate, source_channels)
+                });
         }
 
         if source_channels != output_channels {
@@ -205,6 +266,10 @@ impl AudioState {
 
         let ring = HeapRb::<f32>::new(RING_BUFFER_FRAMES * output_channels);
         let (mut producer, mut consumer) = ring.split();
+        self.inner.ring_capacity_bytes.store(
+            (RING_BUFFER_FRAMES * output_channels * std::mem::size_of::<f32>()) as u32,
+            Ordering::SeqCst,
+        );
 
         self.inner.should_stop.store(false, Ordering::SeqCst);
         let producer_engine = Arc::clone(&self.inner);
@@ -219,11 +284,15 @@ impl AudioState {
 
                 if producer_engine.lookahead_started.load(Ordering::SeqCst) {
                     if !producer_engine.lookahead_completed.load(Ordering::SeqCst) {
-                        let next_path =
-                            producer_engine.next_track.lock().ok().and_then(|path| path.clone());
+                        let next_path = producer_engine
+                            .next_track
+                            .lock()
+                            .ok()
+                            .and_then(|path| path.clone());
                         if let Some(next_path) = next_path {
                             if let Ok(decoded_next) = decode_file(&next_path) {
-                                if let Ok(mut preloaded) = producer_engine.preloaded_next_track.lock()
+                                if let Ok(mut preloaded) =
+                                    producer_engine.preloaded_next_track.lock()
                                 {
                                     if preloaded.is_none() {
                                         *preloaded = Some(decoded_next);
@@ -251,12 +320,20 @@ impl AudioState {
                         if let Some(next) = preloaded.take() {
                             let mut next_pcm = next.samples;
                             if next.sample_rate != output_rate {
-                                next_pcm = resample_linear(
+                                next_pcm = resample_hq(
                                     &next_pcm,
                                     next.sample_rate,
                                     output_rate,
                                     next.channels as usize,
-                                );
+                                )
+                                .unwrap_or_else(|_| {
+                                    resample_linear(
+                                        &next_pcm,
+                                        next.sample_rate,
+                                        output_rate,
+                                        next.channels as usize,
+                                    )
+                                });
                             }
                             if next.channels as usize != output_channels {
                                 next_pcm = adapt_channels(
@@ -269,6 +346,9 @@ impl AudioState {
                             total_frames = pcm.len() / output_channels;
                             read_frame = 0;
                             producer_engine.current_frame.store(0, Ordering::SeqCst);
+                            producer_engine
+                                .file_rate_hz
+                                .store(next.sample_rate, Ordering::SeqCst);
                             producer_engine.track_duration_bits.store(
                                 (total_frames as f32 / output_rate as f32).to_bits(),
                                 Ordering::SeqCst,
@@ -382,7 +462,9 @@ impl AudioState {
             *next_track = path.map(|path| path.as_ref().to_path_buf());
         }
         self.inner.lookahead_started.store(false, Ordering::SeqCst);
-        self.inner.lookahead_completed.store(false, Ordering::SeqCst);
+        self.inner
+            .lookahead_completed
+            .store(false, Ordering::SeqCst);
         #[cfg(target_os = "windows")]
         if let Ok(mut preloaded) = self.inner.preloaded_next_track.lock() {
             preloaded.take();
@@ -425,21 +507,48 @@ impl AudioState {
         gain_db: f32,
         q_factor: f32,
     ) -> Result<(), String> {
-        let eq = self.inner.eq.lock().map_err(lock_err)?;
-        eq.update_band(index, frequency, gain_db, q_factor)
+        let chain = self.inner.dsp_chain.lock().map_err(lock_err)?;
+        chain.update_user_eq_band(index, frequency, gain_db, q_factor)
+    }
+
+    pub fn set_autoeq_profile(&self, profile: &[EqBandConfig]) -> Result<(), String> {
+        let chain = self.inner.dsp_chain.lock().map_err(lock_err)?;
+        let mapped = profile
+            .iter()
+            .map(|band| (band.frequency, band.gain_db, band.q_factor))
+            .collect::<Vec<_>>();
+        chain.set_autoeq_profile(&mapped)
     }
 
     /// Returns current EQ band parameters as Vec of (frequency, gain_db, q_factor).
     pub fn get_eq_bands(&self) -> Result<Vec<(f32, f32, f32)>, String> {
-        let eq = self.inner.eq.lock().map_err(lock_err)?;
-        Ok(eq.get_bands())
+        let chain = self.inner.dsp_chain.lock().map_err(lock_err)?;
+        Ok(chain.user_eq_bands())
     }
 
     /// Computes the combined EQ frequency response curve.
     /// Returns Vec of (frequency_hz, magnitude_db) pairs.
     pub fn get_eq_frequency_response(&self, num_points: usize) -> Result<Vec<(f32, f32)>, String> {
-        let eq = self.inner.eq.lock().map_err(lock_err)?;
-        Ok(eq.compute_frequency_response(num_points))
+        let chain = self.inner.dsp_chain.lock().map_err(lock_err)?;
+        Ok(chain.user_eq_response(num_points))
+    }
+
+    pub fn get_audio_stats(&self) -> AudioStats {
+        AudioStats {
+            device: self
+                .inner
+                .output_device_name
+                .lock()
+                .map(|name| name.clone())
+                .unwrap_or_else(|_| "Unavailable".to_string()),
+            stream_latency_ms: f32::from_bits(
+                self.inner.stream_latency_ms_bits.load(Ordering::Relaxed),
+            ),
+            output_sample_rate_hz: self.inner.output_rate_hz.load(Ordering::Relaxed),
+            file_sample_rate_hz: self.inner.file_rate_hz.load(Ordering::Relaxed),
+            ring_buffer_capacity_bytes: self.inner.ring_capacity_bytes.load(Ordering::Relaxed),
+            ring_buffer_used_bytes: self.inner.ring_used_bytes.load(Ordering::Relaxed),
+        }
     }
 
     pub fn get_vibe_data(&self) -> (Vec<f32>, f32) {
@@ -657,31 +766,33 @@ fn write_samples(
         return;
     }
 
-    let preamp = db_to_gain(f32::from_bits(
-        engine.preamp_db_bits.load(Ordering::Relaxed),
-    ));
     let volume = f32::from_bits(engine.volume_bits.load(Ordering::Relaxed));
-    let mut eq = engine.eq.lock().ok();
+    let preamp_db = f32::from_bits(engine.preamp_db_bits.load(Ordering::Relaxed));
+    let mut chain = engine.dsp_chain.lock().ok();
     let frame_channels = channels.max(1);
     for frame in output.chunks_mut(frame_channels) {
-        let mut left = consumer.try_pop().unwrap_or(0.0) * preamp;
+        let mut left = consumer.try_pop().unwrap_or(0.0);
         let mut right = if frame.len() > 1 {
-            consumer.try_pop().unwrap_or(0.0) * preamp
+            consumer.try_pop().unwrap_or(0.0)
         } else {
             left
         };
-        if let Some(eq) = eq.as_mut() {
-            (left, right) = eq.process_stereo_frame(left, right);
+        if let Some(chain) = chain.as_mut() {
+            (left, right) = chain.process_stereo_frame(left, right, preamp_db);
         }
-        frame[0] = engine.limiter.process_sample(left) * volume;
+        frame[0] = apply_fade_out(engine, left) * volume;
         if frame.len() > 1 {
-            frame[1] = engine.limiter.process_sample(right) * volume;
+            frame[1] = apply_fade_out(engine, right) * volume;
         }
         for out_sample in frame.iter_mut().skip(2) {
-            let sample = consumer.try_pop().unwrap_or(0.0) * preamp;
-            *out_sample = engine.limiter.process_sample(sample) * volume;
+            let sample = consumer.try_pop().unwrap_or(0.0);
+            *out_sample = apply_fade_out(engine, sample) * volume;
         }
     }
+    engine.ring_used_bytes.store(
+        (consumer.occupied_len() * std::mem::size_of::<f32>()) as u32,
+        Ordering::Relaxed,
+    );
     update_vibe_from_f32(engine, output, frame_channels);
     let frame = engine
         .current_frame
@@ -702,34 +813,36 @@ fn write_samples_i16(
         return;
     }
 
-    let preamp = db_to_gain(f32::from_bits(
-        engine.preamp_db_bits.load(Ordering::Relaxed),
-    ));
     let volume = f32::from_bits(engine.volume_bits.load(Ordering::Relaxed));
-    let mut eq = engine.eq.lock().ok();
+    let preamp_db = f32::from_bits(engine.preamp_db_bits.load(Ordering::Relaxed));
+    let mut chain = engine.dsp_chain.lock().ok();
     let frame_channels = channels.max(1);
     for frame in output.chunks_mut(frame_channels) {
-        let mut left = consumer.try_pop().unwrap_or(0.0) * preamp;
+        let mut left = consumer.try_pop().unwrap_or(0.0);
         let mut right = if frame.len() > 1 {
-            consumer.try_pop().unwrap_or(0.0) * preamp
+            consumer.try_pop().unwrap_or(0.0)
         } else {
             left
         };
-        if let Some(eq) = eq.as_mut() {
-            (left, right) = eq.process_stereo_frame(left, right);
+        if let Some(chain) = chain.as_mut() {
+            (left, right) = chain.process_stereo_frame(left, right, preamp_db);
         }
-        let left = engine.limiter.process_sample(left) * volume;
+        let left = apply_fade_out(engine, left) * volume;
         frame[0] = (left.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
         if frame.len() > 1 {
-            let right = engine.limiter.process_sample(right) * volume;
+            let right = apply_fade_out(engine, right) * volume;
             frame[1] = (right.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
         }
         for out_sample in frame.iter_mut().skip(2) {
-            let sample = consumer.try_pop().unwrap_or(0.0) * preamp;
-            let limited = engine.limiter.process_sample(sample) * volume;
+            let sample = consumer.try_pop().unwrap_or(0.0);
+            let limited = apply_fade_out(engine, sample) * volume;
             *out_sample = (limited.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
         }
     }
+    engine.ring_used_bytes.store(
+        (consumer.occupied_len() * std::mem::size_of::<f32>()) as u32,
+        Ordering::Relaxed,
+    );
     update_vibe_from_i16(engine, output, frame_channels);
     let frame = engine
         .current_frame
@@ -750,34 +863,36 @@ fn write_samples_u16(
         return;
     }
 
-    let preamp = db_to_gain(f32::from_bits(
-        engine.preamp_db_bits.load(Ordering::Relaxed),
-    ));
     let volume = f32::from_bits(engine.volume_bits.load(Ordering::Relaxed));
-    let mut eq = engine.eq.lock().ok();
+    let preamp_db = f32::from_bits(engine.preamp_db_bits.load(Ordering::Relaxed));
+    let mut chain = engine.dsp_chain.lock().ok();
     let frame_channels = channels.max(1);
     for frame in output.chunks_mut(frame_channels) {
-        let mut left = consumer.try_pop().unwrap_or(0.0) * preamp;
+        let mut left = consumer.try_pop().unwrap_or(0.0);
         let mut right = if frame.len() > 1 {
-            consumer.try_pop().unwrap_or(0.0) * preamp
+            consumer.try_pop().unwrap_or(0.0)
         } else {
             left
         };
-        if let Some(eq) = eq.as_mut() {
-            (left, right) = eq.process_stereo_frame(left, right);
+        if let Some(chain) = chain.as_mut() {
+            (left, right) = chain.process_stereo_frame(left, right, preamp_db);
         }
-        let left = engine.limiter.process_sample(left) * volume;
+        let left = apply_fade_out(engine, left) * volume;
         frame[0] = (((left.clamp(-1.0, 1.0) + 1.0) * 0.5) * u16::MAX as f32) as u16;
         if frame.len() > 1 {
-            let right = engine.limiter.process_sample(right) * volume;
+            let right = apply_fade_out(engine, right) * volume;
             frame[1] = (((right.clamp(-1.0, 1.0) + 1.0) * 0.5) * u16::MAX as f32) as u16;
         }
         for out_sample in frame.iter_mut().skip(2) {
-            let sample = consumer.try_pop().unwrap_or(0.0) * preamp;
-            let limited = engine.limiter.process_sample(sample) * volume;
+            let sample = consumer.try_pop().unwrap_or(0.0);
+            let limited = apply_fade_out(engine, sample) * volume;
             *out_sample = (((limited.clamp(-1.0, 1.0) + 1.0) * 0.5) * u16::MAX as f32) as u16;
         }
     }
+    engine.ring_used_bytes.store(
+        (consumer.occupied_len() * std::mem::size_of::<f32>()) as u32,
+        Ordering::Relaxed,
+    );
     update_vibe_from_u16(engine, output, frame_channels);
     let frame = engine
         .current_frame
@@ -787,8 +902,16 @@ fn write_samples_u16(
 }
 
 #[cfg(target_os = "windows")]
-fn db_to_gain(db: f32) -> f32 {
-    10.0_f32.powf(db / 20.0)
+fn apply_fade_out(engine: &AudioEngine, sample: f32) -> f32 {
+    let remaining = engine.fade_out_remaining_samples.load(Ordering::Relaxed);
+    if remaining == 0 {
+        return sample;
+    }
+    let prev = engine
+        .fade_out_remaining_samples
+        .fetch_sub(1, Ordering::Relaxed);
+    let total = engine.fade_out_total_samples.load(Ordering::Relaxed).max(1) as f32;
+    sample * (prev as f32 / total).clamp(0.0, 1.0)
 }
 
 #[cfg(target_os = "windows")]

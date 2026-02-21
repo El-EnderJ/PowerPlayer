@@ -1,6 +1,6 @@
 # Current Project State
 
-## Status: Backend Inteligente finalizado y listo para especialización UI
+## Status: Backend Mastered & Finalized
 
 **Last updated**: 2026-02-21
 
@@ -12,6 +12,10 @@
 - Audio playback engine with WASAPI integration (cpal + ringbuf)
 - Symphonia-based FLAC decoder with resampling
 - FFT analysis module (rustfft) for frequency spectrum visualization
+- Dynamic sample-rate transition scaffolding with fade-out stream handoff and HQ `rubato` fallback resampling
+- Large-file decode source optimization: `memmap2` path for audio files bigger than 50MB
+- Modular DSP backend chain: `PreAmp -> AutoEQ -> UserEQ -> StereoWidener -> Limiter`
+- Audio telemetry IPC command `get_audio_stats` (device, latency estimate, output/file sample-rates, ring-buffer memory)
 - Tauri IPC commands: `update_eq_band`, `get_eq_bands`, `get_eq_frequency_response`, `get_fft_data`
 - VisualEQ component: interactive canvas-based parametric EQ with drag points and scroll Q adjustment
 - Fluid Glass UI: FluidBackground (blur album art), PlaybackControls (glass effects + neon glow), Framer Motion transitions
@@ -37,7 +41,7 @@
     - Lightweight metadata repair fallback (`Artist - Title` filename fingerprinting) for missing/corrupt tags
 
 ### In Progress
-- UI specialization phase: surface enrichment status/retries and connect cached art/corrupted flags/next-track queue controls to library and playlist UX
+- UI specialization phase: consume backend telemetry (`get_audio_stats`) and expose final DSP controls (e.g., Stereo Widener amount) in settings panels
 
 ### Next Steps
 1. Consume `art_url` and `corrupted` in library browser cards/list rows

@@ -1,11 +1,18 @@
-use std::{fs::File, path::Path};
+use std::{
+    fs::File,
+    io::{Cursor, Read, Seek},
+    path::Path,
+};
+
+use memmap2::MmapOptions;
+use rubato::{FftFixedInOut, Resampler};
 
 use symphonia::core::{
     audio::SampleBuffer,
     codecs::DecoderOptions,
     errors::Error,
     formats::FormatOptions,
-    io::MediaSourceStream,
+    io::{MediaSource, MediaSourceStream},
     meta::{MetadataOptions, MetadataRevision, StandardTagKey},
     probe::Hint,
 };
@@ -31,9 +38,62 @@ pub struct TrackMetadata {
     pub duration_seconds: Option<f32>,
 }
 
-pub fn read_track_metadata(path: &Path) -> Result<TrackMetadata, String> {
+const MMAP_THRESHOLD_BYTES: u64 = 50 * 1024 * 1024;
+
+enum TrackMediaSource {
+    File(File),
+    Mmap(Cursor<memmap2::Mmap>),
+}
+
+impl Read for TrackMediaSource {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Self::File(file) => file.read(buf),
+            Self::Mmap(cursor) => cursor.read(buf),
+        }
+    }
+}
+
+impl Seek for TrackMediaSource {
+    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+        match self {
+            Self::File(file) => file.seek(pos),
+            Self::Mmap(cursor) => cursor.seek(pos),
+        }
+    }
+}
+
+impl MediaSource for TrackMediaSource {
+    fn is_seekable(&self) -> bool {
+        true
+    }
+
+    fn byte_len(&self) -> Option<u64> {
+        match self {
+            Self::File(file) => file.metadata().ok().map(|meta| meta.len()),
+            Self::Mmap(cursor) => Some(cursor.get_ref().len() as u64),
+        }
+    }
+}
+
+fn should_use_mmap(file_size: u64) -> bool {
+    file_size > MMAP_THRESHOLD_BYTES
+}
+
+fn open_media_source(path: &Path) -> Result<(TrackMediaSource, bool), String> {
     let file = File::open(path).map_err(|e| format!("Cannot open file {}: {e}", path.display()))?;
-    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let file_size = file.metadata().map(|meta| meta.len()).unwrap_or_default();
+    if should_use_mmap(file_size) {
+        let mmap = unsafe { MmapOptions::new().map(&file) }
+            .map_err(|e| format!("Cannot memory-map file {}: {e}", path.display()))?;
+        return Ok((TrackMediaSource::Mmap(Cursor::new(mmap)), true));
+    }
+    Ok((TrackMediaSource::File(file), false))
+}
+
+pub fn read_track_metadata(path: &Path) -> Result<TrackMetadata, String> {
+    let (source, _) = open_media_source(path)?;
+    let mss = MediaSourceStream::new(Box::new(source), Default::default());
 
     let mut hint = Hint::new();
     if let Some(ext) = path.extension().and_then(|ext| ext.to_str()) {
@@ -59,7 +119,7 @@ pub fn read_track_metadata(path: &Path) -> Result<TrackMetadata, String> {
         duration_seconds: None,
     };
 
-    if let Some(mut pre_metadata) = probed.metadata.get() {
+    if let Some(pre_metadata) = probed.metadata.get() {
         if let Some(revision) = pre_metadata.current() {
             apply_metadata_revision(revision, &mut metadata);
         }
@@ -114,8 +174,8 @@ fn apply_metadata_revision(revision: &MetadataRevision, metadata: &mut TrackMeta
 }
 
 pub fn decode_file(path: &Path) -> Result<DecodedTrack, String> {
-    let file = File::open(path).map_err(|e| format!("Cannot open file {}: {e}", path.display()))?;
-    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let (source, _) = open_media_source(path)?;
+    let mss = MediaSourceStream::new(Box::new(source), Default::default());
 
     let mut hint = Hint::new();
     if let Some(ext) = path.extension().and_then(|ext| ext.to_str()) {
@@ -219,14 +279,59 @@ pub fn resample_linear(
     out
 }
 
+pub fn resample_hq(
+    interleaved: &[f32],
+    in_rate: u32,
+    out_rate: u32,
+    channels: usize,
+) -> Result<Vec<f32>, String> {
+    if in_rate == out_rate || channels == 0 || interleaved.is_empty() {
+        return Ok(interleaved.to_vec());
+    }
+    let in_frames = interleaved.len() / channels;
+    if in_frames < 2 {
+        return Ok(interleaved.to_vec());
+    }
+
+    let mut channel_data = vec![Vec::with_capacity(in_frames); channels];
+    for frame in interleaved.chunks(channels) {
+        for (ch, sample) in frame.iter().enumerate() {
+            channel_data[ch].push(*sample);
+        }
+    }
+
+    let chunk_size = in_frames.clamp(64, 2048);
+    let mut resampler =
+        FftFixedInOut::<f32>::new(in_rate as usize, out_rate as usize, chunk_size, channels)
+            .map_err(|e| format!("Rubato init failed: {e}"))?;
+    let output = resampler
+        .process(&channel_data, None)
+        .map_err(|e| format!("Rubato process failed: {e}"))?;
+
+    let out_frames = output.first().map(|ch| ch.len()).unwrap_or_default();
+    let mut interleaved_out = vec![0.0_f32; out_frames * channels];
+    for frame in 0..out_frames {
+        for ch in 0..channels {
+            interleaved_out[frame * channels + ch] = output[ch][frame];
+        }
+    }
+    Ok(interleaved_out)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::resample_linear;
+    use super::{resample_linear, should_use_mmap};
 
     #[test]
     fn resample_changes_frame_count() {
         let stereo = vec![0.0_f32, 0.0, 1.0, 1.0, 0.5, 0.5, -0.5, -0.5];
         let out = resample_linear(&stereo, 48_000, 96_000, 2);
         assert!(out.len() > stereo.len());
+    }
+
+    #[test]
+    fn mmap_threshold_applies_only_to_large_files() {
+        assert!(!should_use_mmap((50 * 1024 * 1024) - 1));
+        assert!(should_use_mmap((50 * 1024 * 1024) + 1));
     }
 }
