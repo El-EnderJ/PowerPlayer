@@ -41,17 +41,21 @@ The React frontend is a "puppet" that:
 | 2026-02-21 | Backend hardening: added SHA-256 art thumbnail cache (`asset://` URLs), optional next-track look-ahead preloading at 95% progress, notify-based realtime library watcher, and corrupted-track persistence | Use cached art + corrupted flags in library UI and expose playlist queue wiring for automatic `set_next_track` |
 | 2026-02-21 | Metadata Enrichment Layer: local-first art resolver (`cover/folder.jpg`) + iTunes/MusicBrainz fallback, LRCLIB synced lyrics downloader into `.lyrics_cache`, and async enrichment queue after DB save | Connect enrichment status to UI and expose retry controls for failed online lookups |
 | 2026-02-21 | Bit-perfect backend polish: dynamic stream fade/restart scaffolding for sample-rate transitions, HQ rubato fallback resampler, memmap2 loading path for files >50MB, modular DSP node chain (PreAmp→AutoEQ→UserEQ→StereoWidener→Limiter), and `get_audio_stats` telemetry IPC | Expose new audio stats and widener controls in frontend diagnostics/audio settings UI |
+| 2026-02-21 | **PowerAmp Level**: Advanced DSP nodes (Tone bass/treble shelving, Balance L/R, StereoExpansion crossfeed, algorithmic Reverb with Freeverb-style combs/allpasses + 4 presets), FTS5 ultra-fast full-text search engine, non-destructive Fisher-Yates shuffle queue, and 7 new Tauri IPC commands | Wire new DSP/search/queue controls to React frontend UI panels |
 
 ## DSP Topology (Engine)
 
 - **Pre-Amp (global)**: applies gain in dB before EQ to create headroom.
+- **Tone Node**: independent LowShelf (~100 Hz, bass) and HighShelf (~10 kHz, treble) biquad filters.
 - **AutoEQ Node**: optional compensation profile applied before user shaping.
 - **User EQ Node**: 10 configurable bands with atomic `frequency`, `gain_db`, and `Q_factor`.
   - Each band uses biquad filters in **Direct Form II Transposed**.
   - Coefficients are recalculated **only when parameters change**.
-- **Stereo Widener Node**: Mid/Side widening stage for headphone spatial enhancement.
+- **Balance Node**: stereo L/R panning from -1.0 (full left) to 1.0 (full right).
+- **Stereo Expansion Node**: crossfeed algorithm with delay line + low-pass filter to simulate speaker listening.
+- **Reverb Node**: Schroeder/Freeverb-inspired algorithmic reverb with 8 parallel comb filters + 4 series all-pass filters, predelay, damping, and wet/dry mix. Includes 4 presets: Estudio, Sala Grande, Club, Iglesia.
 - **Soft Limiter**: final protection stage (threshold near **-0.1 dBFS**) to avoid digital clipping.
-- **Order**: `Input sample -> Pre-Amp -> AutoEQ -> UserEQ -> StereoWidener -> Soft Limiter -> Output`.
+- **Order**: `Input sample -> Pre-Amp -> Tone -> AutoEQ -> UserEQ -> Balance -> StereoExpansion -> Reverb -> Soft Limiter -> Output`.
 
 ## UI-DSP Integration
 
@@ -72,6 +76,13 @@ The React frontend is a "puppet" that:
 | `get_library_tracks()` | Frontend ← Rust | Returns persisted library tracks from SQLite for browser/queue UIs |
 | `activate_autoeq_profile(model)` | Frontend → Rust | Resolves a 10-band AutoEQ profile for headphone model and applies bands via existing EQ update path |
 | `get_audio_stats()` | Frontend ← Rust | Returns device name, stream latency estimate, output/file sample-rates, and ring-buffer memory usage |
+| `set_tone(bass, treble)` | Frontend → Rust | Sets independent bass (LowShelf ~100 Hz) and treble (HighShelf ~10 kHz) gain in dB (±12) |
+| `set_balance(val)` | Frontend → Rust | Sets stereo balance from -1.0 (full left) to 1.0 (full right) |
+| `set_expansion(val)` | Frontend → Rust | Sets crossfeed stereo expansion amount (0.0–1.0) |
+| `set_reverb_params(room_size, damping, predelay_ms, lowpass_filter, decay, wet_mix)` | Frontend → Rust | Sets all reverb parameters atomically |
+| `load_reverb_preset(name)` | Frontend → Rust | Loads a named reverb preset ("Estudio", "Sala Grande", "Club", "Iglesia") |
+| `fast_search(query)` | Frontend ← Rust | FTS5 full-text search returning grouped results (tracks, albums, artists) in milliseconds |
+| `toggle_shuffle(enabled)` | Frontend → Rust | Enables/disables Fisher-Yates shuffle on the playback queue, preserving current track position |
 
 ### Lyrics Synchronization Flow
 - Backend resolves `<track_name>.lrc` next to the loaded audio file and parses `[mm:ss.xx]` tags into `LyricsLine { timestamp, text }`.

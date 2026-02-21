@@ -172,7 +172,7 @@ impl DspChain {
         self.reverb.set_sample_rate(sample_rate);
     }
 
-    /// Order: PreAmp → Tone → AutoEQ → UserEQ → StereoExpansion → Reverb → Limiter
+    /// Order: PreAmp → Tone → AutoEQ → UserEQ → Balance → StereoExpansion → Reverb → Limiter
     pub fn process_stereo_frame(&mut self, left: f32, right: f32, preamp_db: f32) -> (f32, f32) {
         let preamp = db_to_gain(preamp_db);
         let (left, right) = (left * preamp, right * preamp);

@@ -1,6 +1,6 @@
 # Current Project State
 
-## Status: Backend Mastered & Finalized
+## Status: PowerAmp Level — Backend Feature Parity Achieved
 
 **Last updated**: 2026-02-21
 
@@ -39,12 +39,23 @@
     - LRCLIB synced lyrics downloader with app-level `.lyrics_cache` used by the existing lyrics sync engine
     - Background worker queue for metadata enrichment (network downloads run after DB insert, without blocking scans)
     - Lightweight metadata repair fallback (`Artist - Title` filename fingerprinting) for missing/corrupt tags
+  - **PowerAmp Level** DSP & backend features:
+    - Tone Node: independent LowShelf (~100 Hz) and HighShelf (~10 kHz) biquad filters for bass/treble control
+    - Balance Node: stereo L/R panning (-1.0 to 1.0) with min-gain formula
+    - Stereo Expansion Node: crossfeed algorithm with delay line + low-pass filter for speaker-like imaging
+    - Algorithmic Reverb Node: Freeverb/Schroeder-inspired with 8 parallel comb filters + 4 series all-pass, predelay, damping, LP filter, decay, wet/dry mix
+    - Reverb presets: Estudio, Sala Grande, Club, Iglesia
+    - FTS5 full-text search engine: SQLite virtual table with auto-sync triggers, prefix matching, grouped results (tracks/albums/artists)
+    - Non-destructive playback queue: Fisher-Yates shuffle preserving original order and current-track position
+    - DSP chain updated: `PreAmp → Tone → AutoEQ → UserEQ → Balance → StereoExpansion → Reverb → Limiter`
+    - New Tauri IPC commands: `set_tone`, `set_balance`, `set_expansion`, `set_reverb_params`, `load_reverb_preset`, `fast_search`, `toggle_shuffle`
 
 ### In Progress
-- UI specialization phase: consume backend telemetry (`get_audio_stats`) and expose final DSP controls (e.g., Stereo Widener amount) in settings panels
+- UI specialization phase: consume all new backend DSP controls and search in React frontend panels
 
 ### Next Steps
-1. Consume `art_url` and `corrupted` in library browser cards/list rows
-2. Wire playlist queue to `set_next_track(path)` for end-to-end gapless UX
-3. Add automatic output-device detection and profile suggestion prompt for AutoEQ
-4. Add automated integration tests for IPC playback + library scanning flows
+1. Build React UI panels for Tone (bass/treble sliders), Balance, Expansion, and Reverb controls
+2. Build search bar UI connected to `fast_search` with grouped result display
+3. Build queue management UI with shuffle toggle
+4. Consume `art_url` and `corrupted` in library browser cards/list rows
+5. Wire playlist queue to `set_next_track(path)` for end-to-end gapless UX
