@@ -7,6 +7,7 @@ import FluidBackground from "./components/FluidBackground";
 import LyricsView from "./components/LyricsView";
 import PlaybackControls from "./components/PlaybackControls";
 import VisualEQ from "./components/VisualEQ";
+import EqualizerView from "./components/EqualizerView";
 import DynamicPill, { type PillTab } from "./components/DynamicPill";
 import LibraryView from "./components/LibraryView";
 
@@ -61,6 +62,7 @@ function App() {
   const [lyricsLines, setLyricsLines] = useState<LyricsLine[]>([]);
   const [activeLyricIndex, setActiveLyricIndex] = useState(0);
   const [activeView, setActiveView] = useState<PillTab>("library");
+  const [libraryEmpty, setLibraryEmpty] = useState(false);
   const pendingVibeRef = useRef(false);
   const skipFrameRef = useRef(false);
   const amplitudeRef = useRef(0);
@@ -182,6 +184,28 @@ function App() {
     [handlePlay]
   );
 
+  // Check if library is empty on mount
+  useEffect(() => {
+    invokeSafe<{ path: string }[]>("get_library_tracks")
+      .then((tracks) => setLibraryEmpty(!tracks || tracks.length === 0))
+      .catch(() => setLibraryEmpty(true));
+  }, []);
+
+  // Select folder and scan library (Tauri integration)
+  const handleSelectLibrary = useCallback(async () => {
+    try {
+      const selected = await open({ directory: true, multiple: false });
+      if (!selected || Array.isArray(selected)) return;
+      await invoke("scan_library", { path: selected });
+      setLibraryEmpty(false);
+      setActiveView("library");
+    } catch (error) {
+      if (import.meta.env.DEV) {
+        console.error("library scan failed", error);
+      }
+    }
+  }, []);
+
   const currentTrackForPill =
     trackTitle !== "PowerPlayer"
       ? { title: trackTitle, artUrl: albumArt }
@@ -277,7 +301,7 @@ function App() {
   const showFps = import.meta.env.DEV;
 
   return (
-    <div className="h-screen w-screen overflow-hidden bg-[#0a0a0c] text-white">
+    <div className="noise-bg h-screen w-screen overflow-hidden bg-[#0a0a0c] text-white">
       {/* Ambient background from album art */}
       {albumArt && (
         <div
@@ -292,87 +316,126 @@ function App() {
 
       <FluidBackground albumArt={albumArt} />
 
-      {/* Main content area */}
-      {activeView === "library" ? (
-        <LibraryView
-          isPlaying={isPlaying}
-          onPlayPause={handlePlayPause}
-          onTrackSelect={handleTrackSelect}
-        />
-      ) : (
-        <div className="flex h-full flex-col items-center justify-center gap-6 p-6">
-          {/* Album art + title area */}
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={albumArt ?? "default"}
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              transition={{ duration: 0.5, ease: "easeOut" }}
-              className="flex flex-col items-center gap-3"
-            >
-              <div className="h-48 w-48 overflow-hidden rounded-2xl border border-white/10 bg-white/5 shadow-xl backdrop-blur-md">
-                {albumArt ? (
-                  <img
-                    src={albumArt}
-                    alt="Album art"
-                    className="h-full w-full object-cover"
-                  />
-                ) : (
-                  <div className="flex h-full w-full items-center justify-center">
-                    <svg
-                      className="h-16 w-16 text-white/20"
-                      fill="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z" />
-                    </svg>
-                  </div>
-                )}
-              </div>
-              <div className="text-center">
-                <h1 className="text-xl font-semibold text-white">{trackTitle}</h1>
-                <p className="text-sm text-white/50">{trackArtist}</p>
-              </div>
-            </motion.div>
-          </AnimatePresence>
-
-          <button
-            type="button"
-            onClick={handleOpenTrack}
-            className="rounded-lg border border-white/20 bg-white/10 px-4 py-2 text-xs text-white/80 transition hover:bg-white/20"
+      {/* Main content area with animated transitions */}
+      <AnimatePresence mode="wait">
+        {activeView === "library" ? (
+          <motion.div
+            key="library"
+            initial={{ opacity: 0, y: 40, filter: "blur(0px)" }}
+            animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+            exit={{ opacity: 0, filter: "blur(8px)" }}
+            transition={{
+              enter: { type: "spring", stiffness: 300, damping: 25 },
+              exit: { duration: 0.25 },
+            }}
+            className="h-full w-full"
           >
-            Open Track
-          </button>
+            <LibraryView
+              isPlaying={isPlaying}
+              onPlayPause={handlePlayPause}
+              onTrackSelect={handleTrackSelect}
+              onSelectLibrary={handleSelectLibrary}
+            />
+          </motion.div>
+        ) : activeView === "eq" ? (
+          <motion.div
+            key="eq"
+            initial={{ opacity: 0, y: 40, filter: "blur(0px)" }}
+            animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+            exit={{ opacity: 0, filter: "blur(8px)" }}
+            transition={{
+              enter: { type: "spring", stiffness: 300, damping: 25 },
+              exit: { duration: 0.25 },
+            }}
+            className="h-full w-full"
+          >
+            <EqualizerView spectrum={spectrum} />
+          </motion.div>
+        ) : (
+          <motion.div
+            key="player"
+            initial={{ opacity: 0, y: 40, filter: "blur(0px)" }}
+            animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+            exit={{ opacity: 0, filter: "blur(8px)" }}
+            transition={{
+              enter: { type: "spring", stiffness: 300, damping: 25 },
+              exit: { duration: 0.25 },
+            }}
+            className="flex h-full flex-col items-center justify-center gap-6 p-6"
+          >
+            {/* Album art + title area */}
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={albumArt ?? "default"}
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                transition={{ duration: 0.5, ease: "easeOut" }}
+                className="flex flex-col items-center gap-3"
+              >
+                <div className="h-48 w-48 overflow-hidden rounded-2xl border-t border-white/10 border-b-black/40 bg-white/5 shadow-[0_20px_50px_rgba(0,0,0,0.5)] backdrop-blur-[40px] saturate-[180%]">
+                  {albumArt ? (
+                    <img
+                      src={albumArt}
+                      alt="Album art"
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center">
+                      <svg
+                        className="h-16 w-16 text-white/20"
+                        fill="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z" />
+                      </svg>
+                    </div>
+                  )}
+                </div>
+                <div className="text-center">
+                  <h1 className="text-xl font-semibold text-white">{trackTitle}</h1>
+                  <p className="text-sm text-white/50">{trackArtist}</p>
+                </div>
+              </motion.div>
+            </AnimatePresence>
 
-          <LyricsView
-            lines={lyricsLines}
-            activeIndex={activeLyricIndex}
-            fallback={<VisualEQ spectrum={spectrum} />}
-          />
+            <button
+              type="button"
+              onClick={handleOpenTrack}
+              className="rounded-lg border-t border-white/10 border-b-black/40 bg-white/5 px-4 py-2 text-xs text-white/80 shadow-[0_20px_50px_rgba(0,0,0,0.5)] backdrop-blur-[40px] saturate-[180%] transition hover:bg-white/10"
+            >
+              Open Track
+            </button>
 
-          {/* Playback Controls */}
-          <PlaybackControls
-            isPlaying={isPlaying}
-            onPlay={handlePlay}
-            onPause={handlePause}
-            onSkipForward={handleSkipForward}
-            onSkipBack={handleSkipBack}
-            volume={volume}
-            currentTime={currentTime}
-            duration={duration}
-            amplitude={amplitude}
-            onSeek={handleSeek}
-            onVolumeChange={handleVolume}
-          />
+            <LyricsView
+              lines={lyricsLines}
+              activeIndex={activeLyricIndex}
+              fallback={<VisualEQ spectrum={spectrum} />}
+            />
 
-          {lyricsLines.length ? (
-            <div className="w-full max-w-2xl">
-              <VisualEQ spectrum={spectrum} />
-            </div>
-          ) : null}
-        </div>
-      )}
+            {/* Playback Controls */}
+            <PlaybackControls
+              isPlaying={isPlaying}
+              onPlay={handlePlay}
+              onPause={handlePause}
+              onSkipForward={handleSkipForward}
+              onSkipBack={handleSkipBack}
+              volume={volume}
+              currentTime={currentTime}
+              duration={duration}
+              amplitude={amplitude}
+              onSeek={handleSeek}
+              onVolumeChange={handleVolume}
+            />
+
+            {lyricsLines.length ? (
+              <div className="w-full max-w-2xl">
+                <VisualEQ spectrum={spectrum} />
+              </div>
+            ) : null}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Dynamic Pill Navigation */}
       <DynamicPill
@@ -381,6 +444,8 @@ function App() {
         isPlaying={isPlaying}
         onPlayPause={handlePlayPause}
         currentTrack={currentTrackForPill}
+        libraryEmpty={libraryEmpty}
+        onSelectLibrary={handleSelectLibrary}
       />
 
       {showFps ? (
