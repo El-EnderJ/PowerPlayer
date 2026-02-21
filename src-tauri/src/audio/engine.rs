@@ -31,8 +31,11 @@ const STATE_PLAYING: u8 = 1;
 
 /// 4096 frames is a low-latency compromise: enough headroom against occasional decode jitter
 /// while keeping callback fill chunks small to reduce interaction latency for pause/seek.
+/// On underrun the callback injects silence, so this size also caps audible dropouts to short gaps.
 #[cfg(target_os = "windows")]
 const RING_BUFFER_FRAMES: usize = 4096;
+#[cfg(target_os = "windows")]
+const PRODUCER_CHUNK_FRAMES: usize = 256;
 
 pub struct AudioState {
     inner: Arc<AudioEngine>,
@@ -42,6 +45,7 @@ struct AudioEngine {
     is_playing: AtomicU8,
     should_stop: AtomicBool,
     volume_bits: AtomicU32,
+    output_rate_hz: AtomicU32,
     seek_frame: AtomicU32,
     #[cfg(target_os = "windows")]
     stream: Mutex<Option<Stream>>,
@@ -57,6 +61,7 @@ impl AudioState {
                 is_playing: AtomicU8::new(STATE_PAUSED),
                 should_stop: AtomicBool::new(false),
                 volume_bits: AtomicU32::new(1.0_f32.to_bits()),
+                output_rate_hz: AtomicU32::new(48_000),
                 seek_frame: AtomicU32::new(0),
                 #[cfg(target_os = "windows")]
                 stream: Mutex::new(None),
@@ -102,6 +107,7 @@ impl AudioState {
         let source_channels = decoded.channels as usize;
         let output_channels = stream_config.channels as usize;
         let output_rate = stream_config.sample_rate.0;
+        self.inner.output_rate_hz.store(output_rate, Ordering::SeqCst);
 
         let mut pcm = decoded.samples;
         if decoded.sample_rate != output_rate {
@@ -151,7 +157,8 @@ impl AudioState {
                     continue;
                 }
 
-                let writable_frames = (free_slots / output_channels).min(256);
+                // 256-frame batches reduce producer wakeups without building long queueing latency.
+                let writable_frames = (free_slots / output_channels).min(PRODUCER_CHUNK_FRAMES);
                 let end = ((read_frame + writable_frames) * output_channels).min(pcm.len());
                 for sample in &pcm[read_frame * output_channels..end] {
                     if producer.try_push(*sample).is_err() {
@@ -228,7 +235,8 @@ impl AudioState {
 
     pub fn seek(&self, seconds: f64) {
         let clamped = seconds.max(0.0);
-        let frame = (clamped * 48_000.0) as u32;
+        let sample_rate = self.inner.output_rate_hz.load(Ordering::SeqCst) as f64;
+        let frame = (clamped * sample_rate) as u32;
         self.inner.seek_frame.store(frame, Ordering::SeqCst);
     }
 

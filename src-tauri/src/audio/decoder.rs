@@ -88,6 +88,9 @@ pub fn decode_file(path: &Path) -> Result<DecodedTrack, String> {
     })
 }
 
+/// Minimal-cost linear interpolation resampler used only when device and track sample-rates differ.
+/// It is intentionally simple for low-latency startup and predictable memory behavior, but quality is
+/// lower than dedicated sinc-based resamplers; this is acceptable here as a fallback path.
 pub fn resample_linear(interleaved: &[f32], in_rate: u32, out_rate: u32, channels: usize) -> Vec<f32> {
     if in_rate == out_rate || channels == 0 || interleaved.is_empty() {
         return interleaved.to_vec();
