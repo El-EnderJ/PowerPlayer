@@ -1,6 +1,6 @@
 # Current Project State
 
-## Status: Backend 100% complete and ready for UI specialization
+## Status: Backend Inteligente finalizado y listo para especialización UI
 
 **Last updated**: 2026-02-21
 
@@ -30,9 +30,14 @@
   - Gapless backend look-ahead: optional `next_track`, 95% preload trigger, producer-side buffer handoff
   - Real-time library watcher (`notify`) to upsert/remove tracks in background when files change
   - Corrupted file robustness: scanner marks unreadable/corrupt tracks with `corrupted` flag instead of aborting
+  - Enrichment Layer complete:
+    - Intelligent art provider with local-first (`cover/folder.jpg`) and online fallback (iTunes + MusicBrainz/Cover Art Archive)
+    - LRCLIB synced lyrics downloader with app-level `.lyrics_cache` used by the existing lyrics sync engine
+    - Background worker queue for metadata enrichment (network downloads run after DB insert, without blocking scans)
+    - Lightweight metadata repair fallback (`Artist - Title` filename fingerprinting) for missing/corrupt tags
 
 ### In Progress
-- UI specialization phase: connect cached art/corrupted flags/next-track queue controls to library and playlist UX
+- UI specialization phase: surface enrichment status/retries and connect cached art/corrupted flags/next-track queue controls to library and playlist UX
 
 ### Next Steps
 1. Consume `art_url` and `corrupted` in library browser cards/list rows

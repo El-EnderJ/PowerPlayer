@@ -1,13 +1,15 @@
 use crate::audio::decoder::read_track_metadata;
 use crate::db::manager::{DbManager, TrackInput};
 use crate::library::art_cache;
+use crate::library::enrichment_queue;
+use crate::library::metadata::art_fetcher;
 use id3::TagLike;
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use rayon::prelude::*;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, OnceLock};
 use symphonia::core::{
     formats::FormatOptions,
     io::MediaSourceStream,
@@ -28,6 +30,7 @@ pub fn scan_library_path(root: &Path, db: &DbManager) -> Result<usize, String> {
         match db.save_track(&track) {
             Ok(_) => {
                 saved_count.fetch_add(1, Ordering::Relaxed);
+                enrichment_queue::enqueue(track.clone(), db.clone());
             }
             Err(err) => {
                 eprintln!("Failed to persist track {}: {err}", track.path);
@@ -78,9 +81,7 @@ struct LibraryWatcherManager {
 
 impl LibraryWatcherManager {
     fn register(&mut self, path: &Path, db: &DbManager) -> Result<(), String> {
-        let canonical = path
-            .canonicalize()
-            .unwrap_or_else(|_| path.to_path_buf());
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         if self.watched_paths.contains(&canonical) {
             return Ok(());
         }
@@ -113,6 +114,8 @@ fn handle_library_event(event: Event, db: &DbManager) {
             let track = extract_track(&path);
             if let Err(err) = db.save_track(&track) {
                 eprintln!("Failed to persist watched track {}: {err}", track.path);
+            } else {
+                enrichment_queue::enqueue(track, db.clone());
             }
         } else if let Err(err) = db.delete_track(path.to_string_lossy().as_ref()) {
             eprintln!("Failed to delete removed track {}: {err}", path.display());
@@ -156,6 +159,13 @@ fn extract_track(path: &Path) -> TrackInput {
         }
     }
 
+    if art_url.is_none() {
+        art_url = art_fetcher::find_local_cover(path)
+            .and_then(|cover| art_cache::cache_cover_file(path, &cover).ok().flatten());
+    }
+
+    apply_filename_repair(path, &mut title, &mut artist, &mut corrupted);
+
     TrackInput {
         path: path.to_string_lossy().to_string(),
         title: title.or_else(|| {
@@ -170,6 +180,40 @@ fn extract_track(path: &Path) -> TrackInput {
         art_url,
         corrupted,
     }
+}
+
+fn apply_filename_repair(
+    path: &Path,
+    title: &mut Option<String>,
+    artist: &mut Option<String>,
+    corrupted: &mut bool,
+) {
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    let Some((file_artist, file_title)) = parse_artist_title_from_stem(stem) else {
+        return;
+    };
+    if artist.is_none() {
+        *artist = Some(file_artist);
+    }
+    if title.is_none() {
+        *title = Some(file_title);
+    }
+    if artist.is_some() && title.is_some() {
+        *corrupted = false;
+    }
+}
+
+fn parse_artist_title_from_stem(stem: &str) -> Option<(String, String)> {
+    let mut parts = stem.splitn(2, " - ");
+    let artist = parts.next()?.trim();
+    let title = parts.next()?.trim();
+    if artist.is_empty() || title.is_empty() {
+        return None;
+    }
+    Some((artist.to_string(), title.to_string()))
 }
 
 fn read_symphonia_metadata(
@@ -269,7 +313,7 @@ fn apply_revision_metadata(
 
 #[cfg(test)]
 mod tests {
-    use super::extract_track;
+    use super::{extract_track, parse_artist_title_from_stem};
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -290,5 +334,14 @@ mod tests {
         assert!(track.corrupted);
 
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn filename_repair_extracts_artist_and_title() {
+        let parsed = parse_artist_title_from_stem("Daft Punk - One More Time");
+        assert_eq!(
+            parsed,
+            Some(("Daft Punk".to_string(), "One More Time".to_string()))
+        );
     }
 }

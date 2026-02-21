@@ -9,9 +9,19 @@ use std::{
 const THUMBNAIL_SIZE: u32 = 256;
 
 pub fn cache_cover_art(track_path: &Path, cover_art: &CoverArt) -> Result<Option<String>, String> {
+    cache_cover_bytes(track_path, &cover_art.data)
+}
+
+pub fn cache_cover_file(track_path: &Path, art_path: &Path) -> Result<Option<String>, String> {
+    let bytes = fs::read(art_path)
+        .map_err(|e| format!("Failed to read cover art file {}: {e}", art_path.display()))?;
+    cache_cover_bytes(track_path, &bytes)
+}
+
+pub fn cache_cover_bytes(track_path: &Path, bytes: &[u8]) -> Result<Option<String>, String> {
     let cache_file = cache_file_path(track_path);
     if !cache_file.exists() {
-        let image = image::load_from_memory(&cover_art.data)
+        let image = image::load_from_memory(bytes)
             .map_err(|e| format!("Failed to decode embedded cover art: {e}"))?;
         let thumbnail = image.thumbnail(THUMBNAIL_SIZE, THUMBNAIL_SIZE).to_rgb8();
         let mut encoded = Vec::new();
@@ -57,7 +67,12 @@ mod tests {
         let image = RgbImage::from_pixel(16, 16, image::Rgb([255, 0, 0]));
         let mut bytes = Vec::new();
         JpegEncoder::new(&mut bytes)
-            .encode(&image, image.width(), image.height(), ColorType::Rgb8.into())
+            .encode(
+                &image,
+                image.width(),
+                image.height(),
+                ColorType::Rgb8.into(),
+            )
             .expect("test jpeg should encode");
 
         let art = CoverArt {

@@ -39,6 +39,7 @@ The React frontend is a "puppet" that:
 | 2026-02-21 | Phase 4 kickoff: Dynamic Lyrics Engine with `.lrc` parser in Rust, playback-synced `lyrics-line-changed` events, fullscreen LyricsView focus animation, and expanded spectrum fallback when no lyrics exist | Add karaoke-style word-level timing and playlist-aware lyrics preloading |
 | 2026-02-21 | Phase B backend implemented: SQLite pool persistence (`tracks/albums/settings`), multithreaded library scan (`walkdir`+`rayon`) with metadata persistence, and AutoEQ 10-band profile activation path | Connect library + AutoEQ device suggestions to frontend interactions |
 | 2026-02-21 | Backend hardening: added SHA-256 art thumbnail cache (`asset://` URLs), optional next-track look-ahead preloading at 95% progress, notify-based realtime library watcher, and corrupted-track persistence | Use cached art + corrupted flags in library UI and expose playlist queue wiring for automatic `set_next_track` |
+| 2026-02-21 | Metadata Enrichment Layer: local-first art resolver (`cover/folder.jpg`) + iTunes/MusicBrainz fallback, LRCLIB synced lyrics downloader into `.lyrics_cache`, and async enrichment queue after DB save | Connect enrichment status to UI and expose retry controls for failed online lookups |
 
 ## DSP Topology (Engine)
 
@@ -78,6 +79,13 @@ The React frontend is a "puppet" that:
 - During library scan (and watcher updates), backend attempts to read embedded cover art.
 - If cover art exists, a SHA-256 hash of the track path is used as cache key and a `256x256` JPEG thumbnail is written to local cache (`$TMP/powerplayer/art_cache`).
 - The track row stores an `art_url` in `asset://...` form so the library UI can render instantly without storing blob bytes in SQLite.
+
+### Metadata Enrichment Flow (Local + Web)
+- Scanner persists the track first, then pushes a background enrichment task into a worker queue (non-blocking for the main scan).
+- Art resolver priority: embedded art → local `cover.jpg`/`folder.jpg` (same folder) → iTunes Search API (`https://itunes.apple.com/search`) → MusicBrainz recording search (`https://musicbrainz.org/ws/2/recording`) + Cover Art Archive (`https://coverartarchive.org`).
+- Downloaded images are reprocessed by `art_cache.rs` into the same `asset://` thumbnail format used by embedded covers.
+- Lyrics resolver uses LRCLIB (`https://lrclib.net/api/get`) with artist/title/duration and stores synced `.lrc` text in app-local `.lyrics_cache` so the existing sync engine can load it transparently.
+- Track metadata repair tries filename fingerprint fallback (`Artist - Title`) when tags are missing/corrupted.
 
 ### Gapless Look-ahead Flow
 - `AudioState` now stores an optional `next_track` path (`set_next_track(path)` IPC).
