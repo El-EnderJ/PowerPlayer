@@ -1,3 +1,4 @@
+use crate::audio::lyrics_downloader;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -12,10 +13,10 @@ pub fn find_lrc_for_track(track_path: &Path) -> Option<PathBuf> {
     let parent = track_path.parent()?;
     let candidate = parent.join(stem).with_extension("lrc");
     if candidate.is_file() {
-        Some(candidate)
-    } else {
-        None
+        return Some(candidate);
     }
+    let cached = lyrics_downloader::cached_lyrics_path(track_path);
+    cached.is_file().then_some(cached)
 }
 
 pub fn load_lyrics_for_track(track_path: &Path) -> Vec<LyricsLine> {
@@ -107,7 +108,9 @@ fn parse_fraction_to_millis(fraction: &str) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_lrc, LyricsLine};
+    use super::{find_lrc_for_track, parse_lrc, LyricsLine};
+    use crate::audio::lyrics_downloader::cached_lyrics_path;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn parses_single_timestamp_line() {
@@ -140,5 +143,24 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![(10_000, "B"), (15_000, "A")]
         );
+    }
+
+    #[test]
+    fn falls_back_to_cached_lrc_file() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time should move forward")
+            .as_nanos();
+        let track = std::env::temp_dir().join(format!("powerplayer-lyrics-{nanos}.flac"));
+        let cached = cached_lyrics_path(&track);
+        if let Some(parent) = cached.parent() {
+            std::fs::create_dir_all(parent).expect("cache directory should exist");
+        }
+        std::fs::write(&cached, "[00:01.00] cached").expect("cached lyrics should be written");
+
+        let found = find_lrc_for_track(&track);
+        assert_eq!(found.as_deref(), Some(cached.as_path()));
+
+        let _ = std::fs::remove_file(cached);
     }
 }
