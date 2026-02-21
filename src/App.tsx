@@ -7,6 +7,8 @@ import FluidBackground from "./components/FluidBackground";
 import LyricsView from "./components/LyricsView";
 import PlaybackControls from "./components/PlaybackControls";
 import VisualEQ from "./components/VisualEQ";
+import DynamicPill, { type PillTab } from "./components/DynamicPill";
+import LibraryView from "./components/LibraryView";
 
 interface TrackData {
   artist: string;
@@ -58,6 +60,7 @@ function App() {
   const [fps, setFps] = useState(0);
   const [lyricsLines, setLyricsLines] = useState<LyricsLine[]>([]);
   const [activeLyricIndex, setActiveLyricIndex] = useState(0);
+  const [activeView, setActiveView] = useState<PillTab>("library");
   const pendingVibeRef = useRef(false);
   const skipFrameRef = useRef(false);
   const amplitudeRef = useRef(0);
@@ -136,6 +139,53 @@ function App() {
           );
     void invokeSafe("set_volume", { volume: linearVolume }).catch(() => {});
   }, []);
+
+  const handlePlayPause = useCallback(() => {
+    if (isPlaying) {
+      handlePause();
+    } else {
+      handlePlay();
+    }
+  }, [isPlaying, handlePlay, handlePause]);
+
+  const handleTrackSelect = useCallback(
+    async (path: string) => {
+      try {
+        const track = await invoke<TrackData>("load_track", { path });
+        const parsedLyrics = await invoke<LyricsLine[]>("get_lyrics_lines");
+        setTrackTitle(track.title || "Unknown Title");
+        setTrackArtist(track.artist || "Unknown Artist");
+        setDuration(track.duration_seconds || 0);
+        setCurrentTime(0);
+        setLyricsLines(parsedLyrics);
+        setActiveLyricIndex(0);
+        if (track.cover_art) {
+          if (activeArtUrlRef.current) {
+            URL.revokeObjectURL(activeArtUrlRef.current);
+          }
+          const blob = new Blob([new Uint8Array(track.cover_art.data)], {
+            type: track.cover_art.media_type || "image/jpeg",
+          });
+          const artUrl = URL.createObjectURL(blob);
+          activeArtUrlRef.current = artUrl;
+          setAlbumArt(artUrl);
+        } else {
+          setAlbumArt(undefined);
+        }
+        handlePlay();
+      } catch (error) {
+        if (import.meta.env.DEV) {
+          console.error("track select failed", error);
+        }
+      }
+    },
+    [handlePlay]
+  );
+
+  const currentTrackForPill =
+    trackTitle !== "PowerPlayer"
+      ? { title: trackTitle, artUrl: albumArt }
+      : undefined;
 
   useEffect(() => {
     let frameCounter = 0;
@@ -227,87 +277,118 @@ function App() {
   const showFps = import.meta.env.DEV;
 
   return (
-    <>
+    <div className="h-screen w-screen overflow-hidden bg-[#0a0a0c] text-white">
+      {/* Ambient background from album art */}
+      {albumArt && (
+        <div
+          className="pointer-events-none fixed inset-0 -z-10 opacity-20 blur-3xl"
+          style={{
+            backgroundImage: `url(${albumArt})`,
+            backgroundSize: "cover",
+            backgroundPosition: "center",
+          }}
+        />
+      )}
+
       <FluidBackground albumArt={albumArt} />
 
-      <div className="flex min-h-screen flex-col items-center justify-center gap-6 p-6">
-        {/* Album art + title area */}
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={albumArt ?? "default"}
-            initial={{ opacity: 0, scale: 0.9 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.95 }}
-            transition={{ duration: 0.5, ease: "easeOut" }}
-            className="flex flex-col items-center gap-3"
-          >
-            <div className="h-48 w-48 overflow-hidden rounded-2xl border border-white/10 bg-white/5 shadow-xl backdrop-blur-md">
-              {albumArt ? (
-                <img
-                  src={albumArt}
-                  alt="Album art"
-                  className="h-full w-full object-cover"
-                />
-              ) : (
-                <div className="flex h-full w-full items-center justify-center">
-                  <svg
-                    className="h-16 w-16 text-white/20"
-                    fill="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z" />
-                  </svg>
-                </div>
-              )}
-            </div>
-            <div className="text-center">
-              <h1 className="text-xl font-semibold text-white">{trackTitle}</h1>
-              <p className="text-sm text-white/50">{trackArtist}</p>
-            </div>
-          </motion.div>
-        </AnimatePresence>
-
-        <button
-          type="button"
-          onClick={handleOpenTrack}
-          className="rounded-lg border border-white/20 bg-white/10 px-4 py-2 text-xs text-white/80 transition hover:bg-white/20"
-        >
-          Open Track
-        </button>
-
-        <LyricsView
-          lines={lyricsLines}
-          activeIndex={activeLyricIndex}
-          fallback={<VisualEQ spectrum={spectrum} />}
-        />
-
-        {/* Playback Controls */}
-        <PlaybackControls
+      {/* Main content area */}
+      {activeView === "library" ? (
+        <LibraryView
           isPlaying={isPlaying}
-          onPlay={handlePlay}
-          onPause={handlePause}
-          onSkipForward={handleSkipForward}
-          onSkipBack={handleSkipBack}
-          volume={volume}
-          currentTime={currentTime}
-          duration={duration}
-          amplitude={amplitude}
-          onSeek={handleSeek}
-          onVolumeChange={handleVolume}
+          onPlayPause={handlePlayPause}
+          onTrackSelect={handleTrackSelect}
         />
+      ) : (
+        <div className="flex h-full flex-col items-center justify-center gap-6 p-6">
+          {/* Album art + title area */}
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={albumArt ?? "default"}
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{ duration: 0.5, ease: "easeOut" }}
+              className="flex flex-col items-center gap-3"
+            >
+              <div className="h-48 w-48 overflow-hidden rounded-2xl border border-white/10 bg-white/5 shadow-xl backdrop-blur-md">
+                {albumArt ? (
+                  <img
+                    src={albumArt}
+                    alt="Album art"
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  <div className="flex h-full w-full items-center justify-center">
+                    <svg
+                      className="h-16 w-16 text-white/20"
+                      fill="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z" />
+                    </svg>
+                  </div>
+                )}
+              </div>
+              <div className="text-center">
+                <h1 className="text-xl font-semibold text-white">{trackTitle}</h1>
+                <p className="text-sm text-white/50">{trackArtist}</p>
+              </div>
+            </motion.div>
+          </AnimatePresence>
 
-        {lyricsLines.length ? (
-          <div className="w-full max-w-2xl">
-            <VisualEQ spectrum={spectrum} />
-          </div>
-        ) : null}
-      </div>
+          <button
+            type="button"
+            onClick={handleOpenTrack}
+            className="rounded-lg border border-white/20 bg-white/10 px-4 py-2 text-xs text-white/80 transition hover:bg-white/20"
+          >
+            Open Track
+          </button>
+
+          <LyricsView
+            lines={lyricsLines}
+            activeIndex={activeLyricIndex}
+            fallback={<VisualEQ spectrum={spectrum} />}
+          />
+
+          {/* Playback Controls */}
+          <PlaybackControls
+            isPlaying={isPlaying}
+            onPlay={handlePlay}
+            onPause={handlePause}
+            onSkipForward={handleSkipForward}
+            onSkipBack={handleSkipBack}
+            volume={volume}
+            currentTime={currentTime}
+            duration={duration}
+            amplitude={amplitude}
+            onSeek={handleSeek}
+            onVolumeChange={handleVolume}
+          />
+
+          {lyricsLines.length ? (
+            <div className="w-full max-w-2xl">
+              <VisualEQ spectrum={spectrum} />
+            </div>
+          ) : null}
+        </div>
+      )}
+
+      {/* Dynamic Pill Navigation */}
+      <DynamicPill
+        activeTab={activeView}
+        onTabChange={setActiveView}
+        isPlaying={isPlaying}
+        onPlayPause={handlePlayPause}
+        currentTrack={currentTrackForPill}
+      />
+
       {showFps ? (
         <div className="pointer-events-none fixed right-3 top-3 rounded bg-black/50 px-2 py-1 text-xs text-white/80">
           {fps} FPS
         </div>
       ) : null}
-    </>
+    </div>
   );
 }
 
