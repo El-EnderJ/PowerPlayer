@@ -21,9 +21,11 @@ pub fn download_lyrics_for_track(
         return Some(cache_path);
     }
 
-    let duration = duration_seconds
-        .filter(|value| value.is_finite() && *value > 0.0)
-        .map(|value| value.round() as u32)?;
+    let duration = duration_seconds?;
+    if !duration.is_finite() || duration <= 0.0 {
+        return None;
+    }
+    let duration = duration.round() as u32;
     let client = Client::builder()
         .timeout(Duration::from_secs(5))
         .user_agent("PowerPlayer/0.1")
