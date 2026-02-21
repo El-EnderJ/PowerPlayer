@@ -4,7 +4,7 @@ use std::path::Path;
 mod audio;
 mod db;
 mod library;
-use audio::engine::AudioState;
+use audio::engine::{AudioState, AudioStats};
 use db::manager::DbManager;
 
 #[derive(Serialize)]
@@ -39,6 +39,16 @@ struct TrackData {
 struct VibeData {
     spectrum: Vec<f32>,
     amplitude: f32,
+}
+
+#[derive(Serialize)]
+struct AudioStatsData {
+    device: String,
+    stream_latency_ms: f32,
+    output_sample_rate_hz: u32,
+    file_sample_rate_hz: u32,
+    ring_buffer_capacity_bytes: u32,
+    ring_buffer_used_bytes: u32,
 }
 
 #[derive(Serialize)]
@@ -82,10 +92,7 @@ fn activate_autoeq_profile(
 ) -> Result<Vec<EqBandData>, String> {
     let profile = audio::dsp::autoeq::profile_for_model(&model)
         .ok_or_else(|| format!("No AutoEQ profile found for model: {model}"))?;
-
-    for (index, band) in profile.iter().enumerate() {
-        state.update_eq_band(index, band.frequency, band.gain_db, band.q_factor)?;
-    }
+    state.set_autoeq_profile(&profile)?;
 
     get_eq_bands(state)
 }
@@ -227,6 +234,26 @@ fn get_vibe_data(state: tauri::State<'_, AudioState>) -> VibeData {
     }
 }
 
+#[tauri::command]
+fn get_audio_stats(state: tauri::State<'_, AudioState>) -> AudioStatsData {
+    let AudioStats {
+        device,
+        stream_latency_ms,
+        output_sample_rate_hz,
+        file_sample_rate_hz,
+        ring_buffer_capacity_bytes,
+        ring_buffer_used_bytes,
+    } = state.get_audio_stats();
+    AudioStatsData {
+        device,
+        stream_latency_ms,
+        output_sample_rate_hz,
+        file_sample_rate_hz,
+        ring_buffer_capacity_bytes,
+        ring_buffer_used_bytes,
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let db = DbManager::new("powerplayer.db").expect("failed to initialize SQLite manager");
@@ -248,6 +275,7 @@ pub fn run() {
             seek,
             set_volume,
             get_vibe_data,
+            get_audio_stats,
             get_lyrics_lines,
             scan_library,
             get_library_tracks,
