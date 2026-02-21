@@ -1,0 +1,17 @@
+[package]
+name = "src-tauri"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+log = "0.4.22"
+ringbuf = "0.4.7"
+symphonia = { version = "0.5.4", features = ["aac", "flac", "isomp4", "mp3", "ogg", "pcm", "wav"] }
+tauri = { version = "2.0.0", default-features = false, optional = true }
+
+[features]
+default = []
+tauri-state = ["dep:tauri"]
+
+[target.'cfg(target_os = "windows")'.dependencies]
+cpal = "0.16.0"
