@@ -1,5 +1,8 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
+const EQ_BANDS_MIN: usize = 10;
+const EQ_BANDS_MAX: usize = 15;
+
 #[derive(Clone, Copy)]
 pub enum FilterType {
     Peaking,
@@ -138,9 +141,9 @@ impl EqBand {
     }
 
     fn update(&self, frequency: f32, gain_db: f32, q_factor: f32) -> bool {
-        let new_frequency = sanitize_frequency(frequency, 48_000.0).to_bits();
-        let new_gain = gain_db.clamp(-24.0, 24.0).to_bits();
-        let new_q = sanitize_q(q_factor).to_bits();
+        let new_frequency = frequency.to_bits();
+        let new_gain = gain_db.to_bits();
+        let new_q = q_factor.to_bits();
 
         let old_frequency = self.frequency_bits.swap(new_frequency, Ordering::SeqCst);
         let old_gain = self.gain_db_bits.swap(new_gain, Ordering::SeqCst);
@@ -160,7 +163,7 @@ pub struct ParametricEQ {
 
 impl ParametricEQ {
     pub fn new(bands: usize, sample_rate: f32) -> Self {
-        let band_count = bands.clamp(10, 15);
+        let band_count = bands.clamp(EQ_BANDS_MIN, EQ_BANDS_MAX);
         let mut eq_bands = Vec::with_capacity(band_count);
         for index in 0..band_count {
             eq_bands.push(EqBand::new(
@@ -199,10 +202,14 @@ impl ParametricEQ {
     ) -> Result<(), String> {
         let Some(band) = self.bands.get(index) else {
             return Err(format!(
-                "Band index out of range: {index} (valid: 0..{})",
-                self.bands.len().saturating_sub(1)
+                "Band index out of range: {index} (valid: 0 to {})",
+                self.bands.len().saturating_sub(1),
             ));
         };
+
+        let frequency = sanitize_frequency(frequency, self.sample_rate);
+        let gain_db = gain_db.clamp(-24.0, 24.0);
+        let q_factor = sanitize_q(q_factor);
 
         if band.update(frequency, gain_db, q_factor) {
             self.needs_recalculation.store(true, Ordering::SeqCst);

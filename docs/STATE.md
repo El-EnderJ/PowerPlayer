@@ -1,6 +1,6 @@
 # Current Project State
 
-## Status: Fase 2: DSP Engine en progreso
+## Status: Phase 2: DSP Engine in progress
 
 **Last updated**: 2026-02-21
 
@@ -10,7 +10,7 @@
 - Development tooling configured (Tailwind CSS, Framer Motion, PostCSS)
 
 ### In Progress
-- DSP Engine en Rust (EQ paramétrico, pre-amp y limiter)
+- DSP Engine in Rust (parametric EQ, pre-amp and limiter)
 
 ### Next Steps
 1. Implement Tauri IPC commands for file open dialog and FLAC loading
