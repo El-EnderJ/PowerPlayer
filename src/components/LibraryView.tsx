@@ -28,9 +28,10 @@ interface LibraryViewProps {
   isPlaying: boolean;
   onPlayPause: () => void;
   onTrackSelect: (path: string) => void;
+  onSelectLibrary?: () => void;
 }
 
-function LibraryView({ isPlaying, onPlayPause, onTrackSelect }: LibraryViewProps) {
+function LibraryView({ isPlaying, onPlayPause, onTrackSelect, onSelectLibrary }: LibraryViewProps) {
   const [tracks, setTracks] = useState<LibraryTrack[]>([]);
   const [activeTab, setActiveTab] = useState<Tab>("all");
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -64,7 +65,7 @@ function LibraryView({ isPlaying, onPlayPause, onTrackSelect }: LibraryViewProps
   return (
     <div className="relative flex h-full w-full flex-col overflow-hidden">
       {/* Sticky Header */}
-      <div className="sticky top-0 z-30 mx-4 mt-4 mb-2 flex items-center gap-2 rounded-2xl border border-white/5 bg-black/30 px-4 py-3 shadow-2xl backdrop-blur-2xl">
+      <div className="sticky top-0 z-30 mx-4 mt-4 mb-2 flex items-center gap-2 rounded-2xl border-t border-white/10 border-b-black/40 bg-white/5 px-4 py-3 shadow-[0_20px_50px_rgba(0,0,0,0.5)] backdrop-blur-[40px] saturate-[180%]">
         <button
           type="button"
           className="flex items-center gap-1 rounded-xl px-3 py-1.5 text-xs text-gray-300 transition-colors hover:bg-white/10"
@@ -124,8 +125,26 @@ function LibraryView({ isPlaying, onPlayPause, onTrackSelect }: LibraryViewProps
         className="flex-1 overflow-y-auto px-4 pb-32 scrollbar-hide"
       >
         {tracks.length === 0 ? (
-          <div className="flex h-64 items-center justify-center text-gray-500 text-sm">
-            No tracks in library. Use the backend to scan a folder.
+          <div className="flex h-64 flex-col items-center justify-center gap-4">
+            <div className="rounded-2xl border-t border-white/10 border-b-black/40 bg-white/5 px-8 py-6 text-center shadow-[0_20px_50px_rgba(0,0,0,0.5)] backdrop-blur-[40px] saturate-[180%]">
+              <div className="mb-3 text-4xl">🎵</div>
+              <p className="mb-4 text-sm text-white/50">
+                Tu biblioteca está vacía
+              </p>
+              {onSelectLibrary ? (
+                <button
+                  type="button"
+                  onClick={onSelectLibrary}
+                  className="rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-6 py-2.5 text-sm font-medium text-cyan-300 transition-colors hover:bg-cyan-500/20"
+                >
+                  📂 Configurar Biblioteca
+                </button>
+              ) : (
+                <p className="text-xs text-gray-500">
+                  Use the backend to scan a folder.
+                </p>
+              )}
+            </div>
           </div>
         ) : (
           tracks.map((track, index) => (
