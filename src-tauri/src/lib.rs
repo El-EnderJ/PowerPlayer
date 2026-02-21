@@ -2,7 +2,10 @@ use serde::Serialize;
 use std::path::Path;
 
 mod audio;
+mod db;
+mod library;
 use audio::engine::AudioState;
+use db::manager::DbManager;
 
 #[derive(Serialize)]
 struct EqBandData {
@@ -44,6 +47,16 @@ struct LyricsLineData {
     text: String,
 }
 
+#[derive(Serialize)]
+struct LibraryTrackData {
+    path: String,
+    title: Option<String>,
+    artist: Option<String>,
+    album: Option<String>,
+    duration_seconds: Option<f32>,
+    sample_rate: Option<u32>,
+}
+
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! PowerPlayer is ready.", name)
@@ -58,6 +71,21 @@ fn update_eq_band(
     q: f32,
 ) -> Result<(), String> {
     state.update_eq_band(index, freq, gain, q)
+}
+
+#[tauri::command]
+fn activate_autoeq_profile(
+    state: tauri::State<'_, AudioState>,
+    model: String,
+) -> Result<Vec<EqBandData>, String> {
+    let profile = audio::dsp::autoeq::profile_for_model(&model)
+        .ok_or_else(|| format!("No AutoEQ profile found for model: {model}"))?;
+
+    for (index, band) in profile.iter().enumerate() {
+        state.update_eq_band(index, band.frequency, band.gain_db, band.q_factor)?;
+    }
+
+    get_eq_bands(state)
 }
 
 #[tauri::command]
@@ -138,6 +166,27 @@ fn get_lyrics_lines(state: tauri::State<'_, AudioState>) -> Vec<LyricsLineData> 
 }
 
 #[tauri::command]
+fn scan_library(state: tauri::State<'_, DbManager>, path: String) -> Result<usize, String> {
+    library::scanner::scan_library_path(Path::new(&path), &state)
+}
+
+#[tauri::command]
+fn get_library_tracks(state: tauri::State<'_, DbManager>) -> Result<Vec<LibraryTrackData>, String> {
+    Ok(state
+        .get_tracks()?
+        .into_iter()
+        .map(|track| LibraryTrackData {
+            path: track.path,
+            title: track.title,
+            artist: track.artist,
+            album: track.album,
+            duration_seconds: track.duration_seconds,
+            sample_rate: track.sample_rate,
+        })
+        .collect())
+}
+
+#[tauri::command]
 fn play(state: tauri::State<'_, AudioState>) {
     state.play();
 }
@@ -168,12 +217,15 @@ fn get_vibe_data(state: tauri::State<'_, AudioState>) -> VibeData {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let db = DbManager::new("powerplayer.db").expect("failed to initialize SQLite manager");
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AudioState::new())
+        .manage(db)
         .invoke_handler(tauri::generate_handler![
             greet,
             update_eq_band,
+            activate_autoeq_profile,
             get_eq_bands,
             get_eq_frequency_response,
             get_fft_data,
@@ -184,6 +236,8 @@ pub fn run() {
             set_volume,
             get_vibe_data,
             get_lyrics_lines,
+            scan_library,
+            get_library_tracks,
         ])
         .run(tauri::generate_context!())
         .expect("error while running PowerPlayer");
