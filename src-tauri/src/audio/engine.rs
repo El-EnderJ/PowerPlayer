@@ -73,6 +73,7 @@ struct AudioEngine {
     lyrics: Mutex<Vec<LyricsLine>>,
     active_lyric_index: AtomicU32,
     lookahead_started: AtomicBool,
+    lookahead_completed: AtomicBool,
     eq: Mutex<ParametricEQ>,
     next_track: Mutex<Option<PathBuf>>,
     #[cfg(target_os = "windows")]
@@ -104,6 +105,7 @@ impl AudioState {
                 lyrics: Mutex::new(Vec::new()),
                 active_lyric_index: AtomicU32::new(NO_ACTIVE_LYRIC),
                 lookahead_started: AtomicBool::new(false),
+                lookahead_completed: AtomicBool::new(false),
                 eq: Mutex::new(ParametricEQ::new(10, 48_000.0)),
                 next_track: Mutex::new(None),
                 #[cfg(target_os = "windows")]
@@ -127,6 +129,7 @@ impl AudioState {
         self.inner.seek_frame.store(0, Ordering::SeqCst);
         self.inner.current_frame.store(0, Ordering::SeqCst);
         self.inner.lookahead_started.store(false, Ordering::SeqCst);
+        self.inner.lookahead_completed.store(false, Ordering::SeqCst);
         self.inner
             .active_lyric_index
             .store(NO_ACTIVE_LYRIC, Ordering::SeqCst);
@@ -215,12 +218,7 @@ impl AudioState {
                 }
 
                 if producer_engine.lookahead_started.load(Ordering::SeqCst) {
-                    let needs_preload = producer_engine
-                        .preloaded_next_track
-                        .lock()
-                        .map(|track| track.is_none())
-                        .unwrap_or(false);
-                    if needs_preload {
+                    if !producer_engine.lookahead_completed.load(Ordering::SeqCst) {
                         let next_path =
                             producer_engine.next_track.lock().ok().and_then(|path| path.clone());
                         if let Some(next_path) = next_path {
@@ -229,6 +227,12 @@ impl AudioState {
                                 {
                                     if preloaded.is_none() {
                                         *preloaded = Some(decoded_next);
+                                        producer_engine
+                                            .lookahead_started
+                                            .store(false, Ordering::SeqCst);
+                                        producer_engine
+                                            .lookahead_completed
+                                            .store(true, Ordering::SeqCst);
                                     }
                                 }
                             }
@@ -272,6 +276,12 @@ impl AudioState {
                             producer_engine
                                 .lookahead_started
                                 .store(false, Ordering::SeqCst);
+                            producer_engine
+                                .lookahead_completed
+                                .store(false, Ordering::SeqCst);
+                            if let Ok(mut next_track) = producer_engine.next_track.lock() {
+                                next_track.take();
+                            }
                             continue;
                         }
                     }
@@ -372,6 +382,7 @@ impl AudioState {
             *next_track = path.map(|path| path.as_ref().to_path_buf());
         }
         self.inner.lookahead_started.store(false, Ordering::SeqCst);
+        self.inner.lookahead_completed.store(false, Ordering::SeqCst);
         #[cfg(target_os = "windows")]
         if let Ok(mut preloaded) = self.inner.preloaded_next_track.lock() {
             preloaded.take();
@@ -851,6 +862,9 @@ fn trigger_next_track_lookahead(engine: &AudioEngine, current_frame: u32) {
     if duration <= 0.0 {
         return;
     }
+    if engine.lookahead_completed.load(Ordering::Relaxed) {
+        return;
+    }
     if engine
         .next_track
         .lock()
@@ -861,6 +875,8 @@ fn trigger_next_track_lookahead(engine: &AudioEngine, current_frame: u32) {
         return;
     }
     let progress = current_frame as f32 / (duration * rate as f32);
+    // Short-circuit keeps swap() from running before 95%. Once >=95%, swap(true) returns the
+    // previous armed flag; if it was already true, we skip to avoid duplicate preload attempts.
     if progress < 0.95 || engine.lookahead_started.swap(true, Ordering::SeqCst) {
         return;
     }

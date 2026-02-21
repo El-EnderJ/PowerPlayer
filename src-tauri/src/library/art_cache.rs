@@ -50,6 +50,7 @@ mod tests {
     use super::cache_cover_art;
     use crate::audio::decoder::CoverArt;
     use image::{codecs::jpeg::JpegEncoder, ColorType, RgbImage};
+    use std::path::Path;
 
     #[test]
     fn caches_cover_art_as_asset_url() {
@@ -69,6 +70,4 @@ mod tests {
 
         assert!(url.starts_with("asset://"));
     }
-
-    use std::path::Path;
 }

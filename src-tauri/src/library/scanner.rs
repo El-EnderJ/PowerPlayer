@@ -22,6 +22,9 @@ pub fn scan_library_path(root: &Path, db: &DbManager) -> Result<usize, String> {
 
     files.par_iter().for_each(|path| {
         let track = extract_track(path);
+        if track.corrupted {
+            eprintln!("Persisting track marked as corrupted: {}", track.path);
+        }
         match db.save_track(&track) {
             Ok(_) => {
                 saved_count.fetch_add(1, Ordering::Relaxed);
@@ -261,5 +264,31 @@ fn apply_revision_metadata(
         if album.is_none() && matches!(tag.std_key, Some(StandardTagKey::Album)) {
             *album = Some(tag.value.to_string());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_track;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_audio_path() -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time should move forward")
+            .as_nanos();
+        std::env::temp_dir().join(format!("powerplayer-corrupted-{nanos}.flac"))
+    }
+
+    #[test]
+    fn corrupted_file_is_marked_without_panicking_scan() {
+        let path = unique_audio_path();
+        std::fs::write(&path, b"not-a-real-flac").expect("test file should be created");
+
+        let track = extract_track(&path);
+        assert!(track.corrupted);
+
+        let _ = std::fs::remove_file(path);
     }
 }
