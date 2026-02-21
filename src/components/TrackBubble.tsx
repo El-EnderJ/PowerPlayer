@@ -79,7 +79,6 @@ function TrackBubble({
           {dur}
           {format ? ` • ${format}` : ""}
           {sr ? ` • ${sr}` : ""}
-          {artist && album ? ` • ${artist} – ${album}` : ""}
         </span>
       </div>
     </button>

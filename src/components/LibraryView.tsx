@@ -48,7 +48,8 @@ function LibraryView({ isPlaying, onPlayPause, onTrackSelect }: LibraryViewProps
   const scrollToLetter = useCallback(
     (letter: string) => {
       const target = tracks.findIndex((t) => {
-        const first = (t.title ?? t.path).trim().charAt(0).toUpperCase();
+        const name = t.title ?? t.path.split(/[\\/]/).pop() ?? "";
+        const first = name.trim().charAt(0).toUpperCase();
         if (letter === "#") return !/[A-Z]/.test(first);
         return first === letter;
       });
