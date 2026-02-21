@@ -1,6 +1,6 @@
 # Current Project State
 
-## Status: Phase B: Biblioteca + AutoEQ implemented
+## Status: Backend 100% complete and ready for UI specialization
 
 **Last updated**: 2026-02-21
 
@@ -26,13 +26,16 @@
   - Multithreaded library scanner (`walkdir` + `rayon`) with metadata extraction (title, artist, album, duration, sample rate)
   - AutoEQ profile resolver for 10-band EQ and instant DSP application through existing band update path
   - New Tauri commands: `scan_library(path)`, `get_library_tracks()`, `activate_autoeq_profile(model)`
+  - Art Cache Manager: embedded cover extraction, local JPEG thumbnail cache, `asset://` art URLs in DB
+  - Gapless backend look-ahead: optional `next_track`, 95% preload trigger, producer-side buffer handoff
+  - Real-time library watcher (`notify`) to upsert/remove tracks in background when files change
+  - Corrupted file robustness: scanner marks unreadable/corrupt tracks with `corrupted` flag instead of aborting
 
 ### In Progress
-- Dynamic Lyrics Engine (Rust `.lrc` parsing + playback-synced lyric events + immersive lyrics view)
-- Device-aware headphone profile suggestion flow (detect output device and recommend matching AutoEQ profile)
+- UI specialization phase: connect cached art/corrupted flags/next-track queue controls to library and playlist UX
 
 ### Next Steps
-1. Connect scanned library data to frontend browser/queue UX
-2. Add automatic output-device detection and profile suggestion prompt for AutoEQ
-3. Polish Lyrics Engine with richer transitions and error states
+1. Consume `art_url` and `corrupted` in library browser cards/list rows
+2. Wire playlist queue to `set_next_track(path)` for end-to-end gapless UX
+3. Add automatic output-device detection and profile suggestion prompt for AutoEQ
 4. Add automated integration tests for IPC playback + library scanning flows

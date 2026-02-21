@@ -6,7 +6,7 @@ use super::lyrics::{load_lyrics_for_track, LyricsLine};
 use serde::Serialize;
 use std::collections::VecDeque;
 use std::{
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering},
         Arc, Mutex,
@@ -17,8 +17,6 @@ use tauri::{AppHandle, Emitter};
 
 #[cfg(target_os = "windows")]
 use log::{info, warn};
-#[cfg(target_os = "windows")]
-use std::path::PathBuf;
 
 #[cfg(target_os = "windows")]
 use cpal::{
@@ -74,7 +72,12 @@ struct AudioEngine {
     vibe_samples: Mutex<VecDeque<f32>>,
     lyrics: Mutex<Vec<LyricsLine>>,
     active_lyric_index: AtomicU32,
+    lookahead_started: AtomicBool,
+    lookahead_completed: AtomicBool,
     eq: Mutex<ParametricEQ>,
+    next_track: Mutex<Option<PathBuf>>,
+    #[cfg(target_os = "windows")]
+    preloaded_next_track: Mutex<Option<DecodedTrack>>,
     #[cfg(target_os = "windows")]
     limiter: SoftLimiter,
     #[cfg(target_os = "windows")]
@@ -101,7 +104,12 @@ impl AudioState {
                 vibe_samples: Mutex::new(VecDeque::with_capacity(VIBE_WINDOW_SAMPLES)),
                 lyrics: Mutex::new(Vec::new()),
                 active_lyric_index: AtomicU32::new(NO_ACTIVE_LYRIC),
+                lookahead_started: AtomicBool::new(false),
+                lookahead_completed: AtomicBool::new(false),
                 eq: Mutex::new(ParametricEQ::new(10, 48_000.0)),
+                next_track: Mutex::new(None),
+                #[cfg(target_os = "windows")]
+                preloaded_next_track: Mutex::new(None),
                 #[cfg(target_os = "windows")]
                 limiter: SoftLimiter::new(),
                 #[cfg(target_os = "windows")]
@@ -120,6 +128,8 @@ impl AudioState {
         self.inner.is_playing.store(STATE_PAUSED, Ordering::SeqCst);
         self.inner.seek_frame.store(0, Ordering::SeqCst);
         self.inner.current_frame.store(0, Ordering::SeqCst);
+        self.inner.lookahead_started.store(false, Ordering::SeqCst);
+        self.inner.lookahead_completed.store(false, Ordering::SeqCst);
         self.inner
             .active_lyric_index
             .store(NO_ACTIVE_LYRIC, Ordering::SeqCst);
@@ -137,6 +147,9 @@ impl AudioState {
             let _ = handle.join();
         }
         self.inner.stream.lock().map_err(lock_err)?.take();
+        if let Ok(mut preloaded) = self.inner.preloaded_next_track.lock() {
+            preloaded.take();
+        }
 
         let path = path.as_ref().to_path_buf();
         let decoded = decode_file(&path)?;
@@ -197,11 +210,34 @@ impl AudioState {
         let producer_engine = Arc::clone(&self.inner);
         let producer_handle = thread::spawn(move || {
             let mut read_frame: usize = 0;
-            let total_frames = pcm.len() / output_channels;
+            let mut total_frames = pcm.len() / output_channels;
 
             loop {
                 if producer_engine.should_stop.load(Ordering::SeqCst) {
                     break;
+                }
+
+                if producer_engine.lookahead_started.load(Ordering::SeqCst) {
+                    if !producer_engine.lookahead_completed.load(Ordering::SeqCst) {
+                        let next_path =
+                            producer_engine.next_track.lock().ok().and_then(|path| path.clone());
+                        if let Some(next_path) = next_path {
+                            if let Ok(decoded_next) = decode_file(&next_path) {
+                                if let Ok(mut preloaded) = producer_engine.preloaded_next_track.lock()
+                                {
+                                    if preloaded.is_none() {
+                                        *preloaded = Some(decoded_next);
+                                        producer_engine
+                                            .lookahead_started
+                                            .store(false, Ordering::SeqCst);
+                                        producer_engine
+                                            .lookahead_completed
+                                            .store(true, Ordering::SeqCst);
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
 
                 let requested_seek = producer_engine.seek_frame.swap(u32::MAX, Ordering::SeqCst);
@@ -211,6 +247,44 @@ impl AudioState {
                 }
 
                 if read_frame >= total_frames {
+                    if let Ok(mut preloaded) = producer_engine.preloaded_next_track.lock() {
+                        if let Some(next) = preloaded.take() {
+                            let mut next_pcm = next.samples;
+                            if next.sample_rate != output_rate {
+                                next_pcm = resample_linear(
+                                    &next_pcm,
+                                    next.sample_rate,
+                                    output_rate,
+                                    next.channels as usize,
+                                );
+                            }
+                            if next.channels as usize != output_channels {
+                                next_pcm = adapt_channels(
+                                    &next_pcm,
+                                    next.channels as usize,
+                                    output_channels,
+                                );
+                            }
+                            pcm = next_pcm;
+                            total_frames = pcm.len() / output_channels;
+                            read_frame = 0;
+                            producer_engine.current_frame.store(0, Ordering::SeqCst);
+                            producer_engine.track_duration_bits.store(
+                                (total_frames as f32 / output_rate as f32).to_bits(),
+                                Ordering::SeqCst,
+                            );
+                            producer_engine
+                                .lookahead_started
+                                .store(false, Ordering::SeqCst);
+                            producer_engine
+                                .lookahead_completed
+                                .store(false, Ordering::SeqCst);
+                            if let Ok(mut next_track) = producer_engine.next_track.lock() {
+                                next_track.take();
+                            }
+                            continue;
+                        }
+                    }
                     thread::sleep(std::time::Duration::from_millis(10));
                     continue;
                 }
@@ -301,6 +375,18 @@ impl AudioState {
 
     pub fn play(&self) {
         self.inner.is_playing.store(STATE_PLAYING, Ordering::SeqCst);
+    }
+
+    pub fn set_next_track(&self, path: Option<impl AsRef<Path>>) {
+        if let Ok(mut next_track) = self.inner.next_track.lock() {
+            *next_track = path.map(|path| path.as_ref().to_path_buf());
+        }
+        self.inner.lookahead_started.store(false, Ordering::SeqCst);
+        self.inner.lookahead_completed.store(false, Ordering::SeqCst);
+        #[cfg(target_os = "windows")]
+        if let Ok(mut preloaded) = self.inner.preloaded_next_track.lock() {
+            preloaded.take();
+        }
     }
 
     pub fn pause(&self) {
@@ -461,6 +547,15 @@ impl AudioState {
     fn preamp_db(&self) -> f32 {
         f32::from_bits(self.inner.preamp_db_bits.load(Ordering::SeqCst))
     }
+
+    #[cfg(test)]
+    fn has_next_track(&self) -> bool {
+        self.inner
+            .next_track
+            .lock()
+            .map(|next| next.is_some())
+            .unwrap_or(false)
+    }
 }
 
 impl Drop for AudioState {
@@ -588,9 +683,11 @@ fn write_samples(
         }
     }
     update_vibe_from_f32(engine, output, frame_channels);
-    engine
+    let frame = engine
         .current_frame
-        .fetch_add((output.len() / frame_channels) as u32, Ordering::Relaxed);
+        .fetch_add((output.len() / frame_channels) as u32, Ordering::Relaxed)
+        + (output.len() / frame_channels) as u32;
+    trigger_next_track_lookahead(engine, frame);
 }
 
 #[cfg(target_os = "windows")]
@@ -634,9 +731,11 @@ fn write_samples_i16(
         }
     }
     update_vibe_from_i16(engine, output, frame_channels);
-    engine
+    let frame = engine
         .current_frame
-        .fetch_add((output.len() / frame_channels) as u32, Ordering::Relaxed);
+        .fetch_add((output.len() / frame_channels) as u32, Ordering::Relaxed)
+        + (output.len() / frame_channels) as u32;
+    trigger_next_track_lookahead(engine, frame);
 }
 
 #[cfg(target_os = "windows")]
@@ -680,9 +779,11 @@ fn write_samples_u16(
         }
     }
     update_vibe_from_u16(engine, output, frame_channels);
-    engine
+    let frame = engine
         .current_frame
-        .fetch_add((output.len() / frame_channels) as u32, Ordering::Relaxed);
+        .fetch_add((output.len() / frame_channels) as u32, Ordering::Relaxed)
+        + (output.len() / frame_channels) as u32;
+    trigger_next_track_lookahead(engine, frame);
 }
 
 #[cfg(target_os = "windows")]
@@ -754,6 +855,33 @@ fn update_vibe_state(engine: &AudioEngine, mono_samples: Vec<f32>, peak: f32) {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn trigger_next_track_lookahead(engine: &AudioEngine, current_frame: u32) {
+    let duration = f32::from_bits(engine.track_duration_bits.load(Ordering::Relaxed));
+    let rate = engine.output_rate_hz.load(Ordering::Relaxed).max(1);
+    if duration <= 0.0 {
+        return;
+    }
+    if engine.lookahead_completed.load(Ordering::Relaxed) {
+        return;
+    }
+    if engine
+        .next_track
+        .lock()
+        .ok()
+        .and_then(|path| path.clone())
+        .is_none()
+    {
+        return;
+    }
+    let progress = current_frame as f32 / (duration * rate as f32);
+    // Short-circuit keeps swap() from running before 95%. Once >=95%, swap(true) returns the
+    // previous armed flag; if it was already true, we skip to avoid duplicate preload attempts.
+    if progress < 0.95 || engine.lookahead_started.swap(true, Ordering::SeqCst) {
+        return;
+    }
+}
+
 fn lock_err<T>(_: T) -> String {
     "Audio state lock poisoned".to_string()
 }
@@ -788,5 +916,14 @@ mod tests {
         assert_eq!(state.preamp_db(), 24.0);
         state.set_preamp_db(-30.0);
         assert_eq!(state.preamp_db(), -24.0);
+    }
+
+    #[test]
+    fn next_track_can_be_set_and_cleared() {
+        let state = AudioState::new();
+        state.set_next_track(Some("/music/next.flac"));
+        assert!(state.has_next_track());
+        state.set_next_track(None::<&str>);
+        assert!(!state.has_next_track());
     }
 }
