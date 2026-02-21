@@ -2,6 +2,8 @@ use super::dsp::fft::compute_spectrum_mono;
 use super::dsp::filters::ParametricEQ;
 #[cfg(target_os = "windows")]
 use super::dsp::filters::SoftLimiter;
+use super::lyrics::{load_lyrics_for_track, LyricsLine};
+use serde::Serialize;
 use std::collections::VecDeque;
 use std::{
     path::Path,
@@ -11,6 +13,7 @@ use std::{
     },
     thread,
 };
+use tauri::{AppHandle, Emitter};
 
 #[cfg(target_os = "windows")]
 use log::{info, warn};
@@ -49,6 +52,13 @@ pub struct AudioState {
     inner: Arc<AudioEngine>,
 }
 
+#[derive(Clone, Serialize)]
+pub struct LyricsEventPayload {
+    pub index: Option<usize>,
+    pub timestamp: Option<u32>,
+    pub text: Option<String>,
+}
+
 struct AudioEngine {
     is_playing: AtomicU8,
     should_stop: AtomicBool,
@@ -56,15 +66,19 @@ struct AudioEngine {
     preamp_db_bits: AtomicU32,
     output_rate_hz: AtomicU32,
     seek_frame: AtomicU32,
+    current_frame: AtomicU32,
     track_duration_bits: AtomicU32,
     vibe_amplitude_bits: AtomicU32,
     vibe_samples: Mutex<VecDeque<f32>>,
+    lyrics: Mutex<Vec<LyricsLine>>,
+    active_lyric_index: AtomicU32,
     eq: Mutex<ParametricEQ>,
     #[cfg(target_os = "windows")]
     limiter: SoftLimiter,
     #[cfg(target_os = "windows")]
     stream: Mutex<Option<Stream>>,
     decoder_thread: Mutex<Option<thread::JoinHandle<()>>>,
+    lyric_monitor_thread: Mutex<Option<thread::JoinHandle<()>>>,
     #[cfg(target_os = "windows")]
     loaded_path: Mutex<Option<PathBuf>>,
 }
@@ -79,15 +93,19 @@ impl AudioState {
                 preamp_db_bits: AtomicU32::new(0.0_f32.to_bits()),
                 output_rate_hz: AtomicU32::new(48_000),
                 seek_frame: AtomicU32::new(0),
+                current_frame: AtomicU32::new(0),
                 track_duration_bits: AtomicU32::new(0.0_f32.to_bits()),
                 vibe_amplitude_bits: AtomicU32::new(0.0_f32.to_bits()),
                 vibe_samples: Mutex::new(VecDeque::with_capacity(VIBE_WINDOW_SAMPLES)),
+                lyrics: Mutex::new(Vec::new()),
+                active_lyric_index: AtomicU32::new(u32::MAX),
                 eq: Mutex::new(ParametricEQ::new(10, 48_000.0)),
                 #[cfg(target_os = "windows")]
                 limiter: SoftLimiter::new(),
                 #[cfg(target_os = "windows")]
                 stream: Mutex::new(None),
                 decoder_thread: Mutex::new(None),
+                lyric_monitor_thread: Mutex::new(None),
                 #[cfg(target_os = "windows")]
                 loaded_path: Mutex::new(None),
             }),
@@ -99,8 +117,21 @@ impl AudioState {
         self.inner.should_stop.store(true, Ordering::SeqCst);
         self.inner.is_playing.store(STATE_PAUSED, Ordering::SeqCst);
         self.inner.seek_frame.store(0, Ordering::SeqCst);
+        self.inner.current_frame.store(0, Ordering::SeqCst);
+        self.inner
+            .active_lyric_index
+            .store(u32::MAX, Ordering::SeqCst);
 
         if let Some(handle) = self.inner.decoder_thread.lock().map_err(lock_err)?.take() {
+            let _ = handle.join();
+        }
+        if let Some(handle) = self
+            .inner
+            .lyric_monitor_thread
+            .lock()
+            .map_err(lock_err)?
+            .take()
+        {
             let _ = handle.join();
         }
         self.inner.stream.lock().map_err(lock_err)?.take();
@@ -279,6 +310,10 @@ impl AudioState {
         let sample_rate = self.inner.output_rate_hz.load(Ordering::SeqCst) as f64;
         let frame = (clamped * sample_rate) as u32;
         self.inner.seek_frame.store(frame, Ordering::SeqCst);
+        self.inner.current_frame.store(frame, Ordering::SeqCst);
+        self.inner
+            .active_lyric_index
+            .store(u32::MAX, Ordering::SeqCst);
     }
 
     pub fn set_volume(&self, volume: f32) {
@@ -338,6 +373,78 @@ impl AudioState {
         f32::from_bits(self.inner.track_duration_bits.load(Ordering::Relaxed))
     }
 
+    pub fn load_lyrics_for_track(&self, path: impl AsRef<Path>) {
+        let lyrics = load_lyrics_for_track(path.as_ref());
+        if let Ok(mut shared) = self.inner.lyrics.lock() {
+            *shared = lyrics;
+        }
+        self.inner
+            .active_lyric_index
+            .store(u32::MAX, Ordering::SeqCst);
+    }
+
+    pub fn get_lyrics_lines(&self) -> Vec<LyricsLine> {
+        self.inner
+            .lyrics
+            .lock()
+            .map(|lines| lines.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn start_lyrics_monitor(&self, app: AppHandle) -> Result<(), String> {
+        if let Some(handle) = self
+            .inner
+            .lyric_monitor_thread
+            .lock()
+            .map_err(lock_err)?
+            .take()
+        {
+            let _ = handle.join();
+        }
+        let engine = Arc::clone(&self.inner);
+        let handle = thread::spawn(move || loop {
+            if engine.should_stop.load(Ordering::SeqCst) {
+                break;
+            }
+            let lyrics = match engine.lyrics.lock() {
+                Ok(lines) => lines.clone(),
+                Err(_) => Vec::new(),
+            };
+            let rate = engine.output_rate_hz.load(Ordering::Relaxed).max(1);
+            let frame = engine.current_frame.load(Ordering::Relaxed);
+            let now_ms = ((frame as u64) * 1000 / (rate as u64)) as u32;
+            let index = lyrics
+                .iter()
+                .enumerate()
+                .rev()
+                .find(|(_, line)| line.timestamp <= now_ms)
+                .map(|(i, _)| i);
+            let current_idx = index.map(|i| i as u32).unwrap_or(u32::MAX);
+            if engine
+                .active_lyric_index
+                .swap(current_idx, Ordering::SeqCst)
+                != current_idx
+            {
+                let payload = index
+                    .and_then(|i| lyrics.get(i).map(|line| (i, line)))
+                    .map(|(i, line)| LyricsEventPayload {
+                        index: Some(i),
+                        timestamp: Some(line.timestamp),
+                        text: Some(line.text.clone()),
+                    })
+                    .unwrap_or(LyricsEventPayload {
+                        index: None,
+                        timestamp: None,
+                        text: None,
+                    });
+                let _ = app.emit("lyrics-line-changed", payload);
+            }
+            thread::sleep(std::time::Duration::from_millis(40));
+        });
+        *self.inner.lyric_monitor_thread.lock().map_err(lock_err)? = Some(handle);
+        Ok(())
+    }
+
     #[cfg(test)]
     fn playing_state(&self) -> u8 {
         self.inner.is_playing.load(Ordering::SeqCst)
@@ -358,6 +465,11 @@ impl Drop for AudioState {
     fn drop(&mut self) {
         self.inner.should_stop.store(true, Ordering::SeqCst);
         if let Ok(mut handle) = self.inner.decoder_thread.lock() {
+            if let Some(join_handle) = handle.take() {
+                let _ = join_handle.join();
+            }
+        }
+        if let Ok(mut handle) = self.inner.lyric_monitor_thread.lock() {
             if let Some(join_handle) = handle.take() {
                 let _ = join_handle.join();
             }
@@ -474,6 +586,9 @@ fn write_samples(
         }
     }
     update_vibe_from_f32(engine, output, frame_channels);
+    engine
+        .current_frame
+        .fetch_add((output.len() / frame_channels) as u32, Ordering::Relaxed);
 }
 
 #[cfg(target_os = "windows")]
@@ -517,6 +632,9 @@ fn write_samples_i16(
         }
     }
     update_vibe_from_i16(engine, output, frame_channels);
+    engine
+        .current_frame
+        .fetch_add((output.len() / frame_channels) as u32, Ordering::Relaxed);
 }
 
 #[cfg(target_os = "windows")]
@@ -560,6 +678,9 @@ fn write_samples_u16(
         }
     }
     update_vibe_from_u16(engine, output, frame_channels);
+    engine
+        .current_frame
+        .fetch_add((output.len() / frame_channels) as u32, Ordering::Relaxed);
 }
 
 #[cfg(target_os = "windows")]

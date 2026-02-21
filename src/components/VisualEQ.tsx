@@ -48,6 +48,11 @@ export default function VisualEQ({ spectrum = [] }: VisualEQProps) {
   const [response, setResponse] = useState<FrequencyPoint[]>([]);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const animFrameRef = useRef<number>(0);
+  const spectrumRef = useRef<number[]>(spectrum);
+
+  useEffect(() => {
+    spectrumRef.current = spectrum;
+  }, [spectrum]);
 
   const fetchBands = useCallback(async () => {
     try {
@@ -219,11 +224,11 @@ export default function VisualEQ({ spectrum = [] }: VisualEQProps) {
         ctx.shadowBlur = 0;
       }
 
-      if (spectrum.length > 0) {
-        const bins = Math.min(64, spectrum.length);
+      if (spectrumRef.current.length > 0) {
+        const bins = Math.min(64, spectrumRef.current.length);
         const barWidth = w / bins;
         for (let i = 0; i < bins; i++) {
-          const db = spectrum[i];
+          const db = spectrumRef.current[i];
           const normalized = Math.max(0, Math.min(1, (db + 100) / 100));
           const barHeight = normalized * h * 0.25;
           const x = i * barWidth;
@@ -262,7 +267,7 @@ export default function VisualEQ({ spectrum = [] }: VisualEQProps) {
 
     animFrameRef.current = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(animFrameRef.current);
-  }, [bands, response, dragIndex, spectrum]);
+  }, [bands, response, dragIndex]);
 
   // Mouse interaction handlers
   const handleMouseDown = useCallback(

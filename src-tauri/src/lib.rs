@@ -38,6 +38,12 @@ struct VibeData {
     amplitude: f32,
 }
 
+#[derive(Serialize)]
+struct LyricsLineData {
+    timestamp: u32,
+    text: String,
+}
+
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! PowerPlayer is ready.", name)
@@ -90,10 +96,16 @@ fn get_fft_data() -> Vec<f32> {
 }
 
 #[tauri::command]
-fn load_track(state: tauri::State<'_, AudioState>, path: String) -> Result<TrackData, String> {
+fn load_track(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AudioState>,
+    path: String,
+) -> Result<TrackData, String> {
     let metadata = audio::decoder::read_track_metadata(Path::new(&path))?;
+    state.load_lyrics_for_track(&path);
     if state.playback_supported() {
         state.load_track(&path)?;
+        state.start_lyrics_monitor(app)?;
     }
 
     Ok(TrackData {
@@ -111,6 +123,18 @@ fn load_track(state: tauri::State<'_, AudioState>, path: String) -> Result<Track
             .get_track_duration_seconds()
             .max(metadata.duration_seconds.unwrap_or(0.0)),
     })
+}
+
+#[tauri::command]
+fn get_lyrics_lines(state: tauri::State<'_, AudioState>) -> Vec<LyricsLineData> {
+    state
+        .get_lyrics_lines()
+        .into_iter()
+        .map(|line| LyricsLineData {
+            timestamp: line.timestamp,
+            text: line.text,
+        })
+        .collect()
 }
 
 #[tauri::command]
@@ -159,6 +183,7 @@ pub fn run() {
             seek,
             set_volume,
             get_vibe_data,
+            get_lyrics_lines,
         ])
         .run(tauri::generate_context!())
         .expect("error while running PowerPlayer");

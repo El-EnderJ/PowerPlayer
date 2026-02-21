@@ -1,8 +1,10 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import FluidBackground from "./components/FluidBackground";
+import LyricsView from "./components/LyricsView";
 import PlaybackControls from "./components/PlaybackControls";
 import VisualEQ from "./components/VisualEQ";
 
@@ -21,8 +23,20 @@ interface VibeData {
   amplitude: number;
 }
 
+interface LyricsLine {
+  timestamp: number;
+  text: string;
+}
+
+interface LyricsEventPayload {
+  index: number | null;
+  timestamp: number | null;
+  text: string | null;
+}
+
 const VOLUME_SLIDER_DB_RANGE = 60;
 const VIBE_SKIP_THRESHOLD_MS = 8;
+const VIBE_CHANGE_THRESHOLD = 0.75;
 
 function App() {
   const [isPlaying, setIsPlaying] = useState(false);
@@ -35,8 +49,12 @@ function App() {
   const [spectrum, setSpectrum] = useState<number[]>([]);
   const [amplitude, setAmplitude] = useState(0);
   const [fps, setFps] = useState(0);
+  const [lyricsLines, setLyricsLines] = useState<LyricsLine[]>([]);
+  const [activeLyricIndex, setActiveLyricIndex] = useState(0);
   const pendingVibeRef = useRef(false);
   const skipFrameRef = useRef(false);
+  const amplitudeRef = useRef(0);
+  const spectrumRef = useRef<number[]>([]);
   const activeArtUrlRef = useRef<string | null>(null);
 
   const handlePlay = useCallback(() => {
@@ -67,10 +85,13 @@ function App() {
       if (!selected || Array.isArray(selected)) return;
 
       const track = await invoke<TrackData>("load_track", { path: selected });
+      const parsedLyrics = await invoke<LyricsLine[]>("get_lyrics_lines");
       setTrackTitle(track.title || "Unknown Title");
       setTrackArtist(track.artist || "Unknown Artist");
       setDuration(track.duration_seconds || 0);
       setCurrentTime(0);
+      setLyricsLines(parsedLyrics);
+      setActiveLyricIndex(0);
       if (track.cover_art) {
         if (activeArtUrlRef.current) {
           URL.revokeObjectURL(activeArtUrlRef.current);
@@ -133,8 +154,20 @@ function App() {
       const start = performance.now();
       invoke<VibeData>("get_vibe_data")
         .then((vibe) => {
-          setSpectrum(vibe.spectrum);
-          setAmplitude(vibe.amplitude);
+          const spectrumChanged = hasSignificantSpectrumChange(
+            spectrumRef.current,
+            vibe.spectrum
+          );
+          const amplitudeChanged =
+            Math.abs(amplitudeRef.current - vibe.amplitude) > 0.01;
+          if (spectrumChanged) {
+            spectrumRef.current = vibe.spectrum;
+            setSpectrum(vibe.spectrum);
+          }
+          if (amplitudeChanged) {
+            amplitudeRef.current = vibe.amplitude;
+            setAmplitude(vibe.amplitude);
+          }
         })
         .catch(() => {})
         .finally(() => {
@@ -157,6 +190,25 @@ function App() {
     },
     []
   );
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<LyricsEventPayload>("lyrics-line-changed", (event) => {
+      const index = event.payload.index;
+      if (typeof index === "number" && index >= 0) {
+        setActiveLyricIndex(index);
+      } else {
+        setActiveLyricIndex(0);
+      }
+    })
+      .then((cleanup) => {
+        unlisten = cleanup;
+      })
+      .catch(() => {});
+    return () => {
+      unlisten?.();
+    };
+  }, []);
 
   const showFps = import.meta.env.DEV;
 
@@ -209,6 +261,12 @@ function App() {
           Open Track
         </button>
 
+        <LyricsView
+          lines={lyricsLines}
+          activeIndex={activeLyricIndex}
+          fallback={<VisualEQ spectrum={spectrum} />}
+        />
+
         {/* Playback Controls */}
         <PlaybackControls
           isPlaying={isPlaying}
@@ -224,10 +282,11 @@ function App() {
           onVolumeChange={handleVolume}
         />
 
-        {/* Visual EQ */}
-        <div className="w-full max-w-2xl">
-          <VisualEQ spectrum={spectrum} />
-        </div>
+        {lyricsLines.length ? (
+          <div className="w-full max-w-2xl">
+            <VisualEQ spectrum={spectrum} />
+          </div>
+        ) : null}
       </div>
       {showFps ? (
         <div className="pointer-events-none fixed right-3 top-3 rounded bg-black/50 px-2 py-1 text-xs text-white/80">
@@ -236,6 +295,22 @@ function App() {
       ) : null}
     </>
   );
+}
+
+function hasSignificantSpectrumChange(previous: number[], next: number[]): boolean {
+  if (previous.length !== next.length) {
+    return true;
+  }
+  if (!next.length) {
+    return false;
+  }
+  const step = Math.max(1, Math.floor(next.length / 48));
+  for (let i = 0; i < next.length; i += step) {
+    if (Math.abs(previous[i] - next[i]) > VIBE_CHANGE_THRESHOLD) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export default App;
