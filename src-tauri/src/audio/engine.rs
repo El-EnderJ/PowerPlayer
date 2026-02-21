@@ -520,6 +520,52 @@ impl AudioState {
         chain.set_autoeq_profile(&mapped)
     }
 
+    pub fn set_tone(&self, bass: f32, treble: f32) -> Result<(), String> {
+        let chain = self.inner.dsp_chain.lock().map_err(lock_err)?;
+        chain.tone().set_bass(bass);
+        chain.tone().set_treble(treble);
+        Ok(())
+    }
+
+    pub fn set_balance(&self, balance: f32) -> Result<(), String> {
+        let chain = self.inner.dsp_chain.lock().map_err(lock_err)?;
+        chain.balance().set_balance(balance);
+        Ok(())
+    }
+
+    pub fn set_expansion(&self, amount: f32) -> Result<(), String> {
+        let chain = self.inner.dsp_chain.lock().map_err(lock_err)?;
+        chain.expansion().set_amount(amount);
+        Ok(())
+    }
+
+    pub fn set_reverb_params(
+        &self,
+        room_size: f32,
+        damping: f32,
+        predelay_ms: f32,
+        lowpass_filter: f32,
+        decay: f32,
+        wet_mix: f32,
+    ) -> Result<(), String> {
+        let chain = self.inner.dsp_chain.lock().map_err(lock_err)?;
+        chain.reverb().set_room_size(room_size);
+        chain.reverb().set_damping(damping);
+        chain.reverb().set_predelay_ms(predelay_ms);
+        chain.reverb().set_lowpass_filter(lowpass_filter);
+        chain.reverb().set_decay(decay);
+        chain.reverb().set_wet_mix(wet_mix);
+        Ok(())
+    }
+
+    pub fn load_reverb_preset(&self, name: &str) -> Result<(), String> {
+        let preset = super::dsp::reverb::get_preset(name)
+            .ok_or_else(|| format!("Unknown reverb preset: {name}"))?;
+        let chain = self.inner.dsp_chain.lock().map_err(lock_err)?;
+        chain.reverb().load_preset(preset);
+        Ok(())
+    }
+
     /// Returns current EQ band parameters as Vec of (frequency, gain_db, q_factor).
     pub fn get_eq_bands(&self) -> Result<Vec<(f32, f32, f32)>, String> {
         let chain = self.inner.dsp_chain.lock().map_err(lock_err)?;

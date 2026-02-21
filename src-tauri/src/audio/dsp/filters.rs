@@ -142,33 +142,46 @@ impl Default for StereoWidener {
 }
 
 pub struct DspChain {
+    tone: super::tone::ToneNode,
     auto_eq: ParametricEQ,
     user_eq: ParametricEQ,
-    widener: StereoWidener,
+    balance: super::tone::BalanceNode,
+    expansion: super::tone::StereoExpansionNode,
+    reverb: super::reverb::ReverbNode,
     limiter: SoftLimiter,
 }
 
 impl DspChain {
     pub fn new(sample_rate: f32) -> Self {
         Self {
+            tone: super::tone::ToneNode::new(sample_rate),
             auto_eq: ParametricEQ::new(10, sample_rate),
             user_eq: ParametricEQ::new(10, sample_rate),
-            widener: StereoWidener::new(),
+            balance: super::tone::BalanceNode::new(),
+            expansion: super::tone::StereoExpansionNode::new(sample_rate),
+            reverb: super::reverb::ReverbNode::new(sample_rate),
             limiter: SoftLimiter::new(),
         }
     }
 
     pub fn set_sample_rate(&mut self, sample_rate: f32) {
+        self.tone.set_sample_rate(sample_rate);
         self.auto_eq.set_sample_rate(sample_rate);
         self.user_eq.set_sample_rate(sample_rate);
+        self.expansion.set_sample_rate(sample_rate);
+        self.reverb.set_sample_rate(sample_rate);
     }
 
+    /// Order: PreAmp → Tone → AutoEQ → UserEQ → Balance → StereoExpansion → Reverb → Limiter
     pub fn process_stereo_frame(&mut self, left: f32, right: f32, preamp_db: f32) -> (f32, f32) {
         let preamp = db_to_gain(preamp_db);
         let (left, right) = (left * preamp, right * preamp);
+        let (left, right) = self.tone.process_stereo_frame(left, right);
         let (left, right) = self.auto_eq.process_stereo_frame(left, right);
         let (left, right) = self.user_eq.process_stereo_frame(left, right);
-        let (left, right) = self.widener.process_stereo_frame(left, right);
+        let (left, right) = self.balance.process_stereo_frame(left, right);
+        let (left, right) = self.expansion.process_stereo_frame(left, right);
+        let (left, right) = self.reverb.process_stereo_frame(left, right);
         (
             self.limiter.process_sample(left),
             self.limiter.process_sample(right),
@@ -199,6 +212,22 @@ impl DspChain {
             self.auto_eq.update_band(idx, freq, gain_db, q)?;
         }
         Ok(())
+    }
+
+    pub fn tone(&self) -> &super::tone::ToneNode {
+        &self.tone
+    }
+
+    pub fn balance(&self) -> &super::tone::BalanceNode {
+        &self.balance
+    }
+
+    pub fn expansion(&self) -> &super::tone::StereoExpansionNode {
+        &self.expansion
+    }
+
+    pub fn reverb(&self) -> &super::reverb::ReverbNode {
+        &self.reverb
     }
 }
 

@@ -1,11 +1,14 @@
 use serde::Serialize;
 use std::path::Path;
+use std::sync::Mutex;
 
 mod audio;
 mod db;
 mod library;
 use audio::engine::{AudioState, AudioStats};
 use db::manager::DbManager;
+use db::search::SearchResults;
+use library::queue::PlaybackQueue;
 
 #[derive(Serialize)]
 struct EqBandData {
@@ -254,13 +257,73 @@ fn get_audio_stats(state: tauri::State<'_, AudioState>) -> AudioStatsData {
     }
 }
 
+#[tauri::command]
+fn set_tone(
+    state: tauri::State<'_, AudioState>,
+    bass: f32,
+    treble: f32,
+) -> Result<(), String> {
+    state.set_tone(bass, treble)
+}
+
+#[tauri::command]
+fn set_balance(state: tauri::State<'_, AudioState>, val: f32) -> Result<(), String> {
+    state.set_balance(val)
+}
+
+#[tauri::command]
+fn set_expansion(state: tauri::State<'_, AudioState>, val: f32) -> Result<(), String> {
+    state.set_expansion(val)
+}
+
+#[tauri::command]
+fn set_reverb_params(
+    state: tauri::State<'_, AudioState>,
+    room_size: f32,
+    damping: f32,
+    predelay_ms: f32,
+    lowpass_filter: f32,
+    decay: f32,
+    wet_mix: f32,
+) -> Result<(), String> {
+    state.set_reverb_params(room_size, damping, predelay_ms, lowpass_filter, decay, wet_mix)
+}
+
+#[tauri::command]
+fn load_reverb_preset(
+    state: tauri::State<'_, AudioState>,
+    name: String,
+) -> Result<(), String> {
+    state.load_reverb_preset(&name)
+}
+
+#[tauri::command]
+fn fast_search(
+    state: tauri::State<'_, DbManager>,
+    query: String,
+) -> Result<SearchResults, String> {
+    state.fast_search(&query)
+}
+
+#[tauri::command]
+fn toggle_shuffle(
+    state: tauri::State<'_, Mutex<PlaybackQueue>>,
+    enabled: bool,
+) -> Result<(), String> {
+    let mut queue = state.lock().map_err(|e| format!("Queue lock error: {e}"))?;
+    queue.toggle_shuffle(enabled);
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let db = DbManager::new("powerplayer.db").expect("failed to initialize SQLite manager");
+    db.initialize_fts().expect("failed to initialize FTS5 search");
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AudioState::new())
         .manage(db)
+        .manage(Mutex::new(PlaybackQueue::new()))
         .invoke_handler(tauri::generate_handler![
             greet,
             update_eq_band,
@@ -279,6 +342,13 @@ pub fn run() {
             get_lyrics_lines,
             scan_library,
             get_library_tracks,
+            set_tone,
+            set_balance,
+            set_expansion,
+            set_reverb_params,
+            load_reverb_preset,
+            fast_search,
+            toggle_shuffle,
         ])
         .run(tauri::generate_context!())
         .expect("error while running PowerPlayer");

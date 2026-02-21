@@ -174,7 +174,7 @@ impl DbManager {
         Ok(())
     }
 
-    fn connection(&self) -> Result<PooledConnection<SqliteConnectionManager>, String> {
+    pub(crate) fn connection(&self) -> Result<PooledConnection<SqliteConnectionManager>, String> {
         self.pool
             .get()
             .map_err(|e| format!("Failed to get DB connection from pool: {e}"))
