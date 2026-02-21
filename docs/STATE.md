@@ -1,6 +1,6 @@
 # Current Project State
 
-## Status: PowerAmp Level — Backend Feature Parity Achieved
+## Status: PowerAmp Level+ — Backend avanzado estable, frontend parcial
 
 **Last updated**: 2026-02-21
 
@@ -14,13 +14,14 @@
 - FFT analysis module (rustfft) for frequency spectrum visualization
 - Dynamic sample-rate transition scaffolding with fade-out stream handoff and HQ `rubato` fallback resampling
 - Large-file decode source optimization: `memmap2` path for audio files bigger than 50MB
-- Modular DSP backend chain: `PreAmp -> AutoEQ -> UserEQ -> StereoWidener -> Limiter`
+- Modular DSP backend chain: `PreAmp -> Tone -> AutoEQ -> UserEQ -> Balance -> StereoExpansion -> Spatial -> Reverb -> SoftLimiter`
 - Audio telemetry IPC command `get_audio_stats` (device, latency estimate, output/file sample-rates, ring-buffer memory)
 - Tauri IPC commands: `update_eq_band`, `get_eq_bands`, `get_eq_frequency_response`, `get_fft_data`
 - VisualEQ component: interactive canvas-based parametric EQ with drag points and scroll Q adjustment
 - Fluid Glass UI: FluidBackground (blur album art), PlaybackControls (glass effects + neon glow), Framer Motion transitions
 - Native file loading with `tauri-plugin-dialog` and backend `load_track` metadata payload (artist/title/cover/duration)
 - Real-time vibe feed (`get_vibe_data`) connected to requestAnimationFrame visual updates and neon glow intensity
+- Browser-safe frontend invocation wrapper for Tauri commands (prevents runtime errors when testing in pure Vite/web mode)
 - Seek `ProgressBar` with debounced `seek(seconds)` calls and logarithmic volume slider mapping
 - Optional dev FPS counter for canvas/render profiling
 - Phase B backend foundations:
@@ -51,11 +52,16 @@
     - New Tauri IPC commands: `set_tone`, `set_balance`, `set_expansion`, `set_reverb_params`, `load_reverb_preset`, `fast_search`, `toggle_shuffle`
 
 ### In Progress
-- UI specialization phase: consume all new backend DSP controls and search in React frontend panels
+- UI specialization phase: consume remaining backend DSP/spatial/stems/search/queue controls in React frontend panels
 
 ### Next Steps
-1. Build React UI panels for Tone (bass/treble sliders), Balance, Expansion, and Reverb controls
+1. Build React UI panels for Tone (bass/treble sliders), Balance, Expansion, Reverb and Spatial controls
 2. Build search bar UI connected to `fast_search` with grouped result display
 3. Build queue management UI with shuffle toggle
 4. Consume `art_url` and `corrupted` in library browser cards/list rows
 5. Wire playlist queue to `set_next_track(path)` for end-to-end gapless UX
+
+### Manual Validation Snapshot (2026-02-21)
+- ✅ `npm ci && npm run build` (frontend build OK)
+- ✅ `cd src-tauri && cargo test` (69 tests passing on Linux with GTK/WebKit deps installed)
+- ✅ Manual UI smoke test in dev mode (home, playback controls, volume, EQ panel) with screenshots in `docs/images/`

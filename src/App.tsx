@@ -38,6 +38,12 @@ const VOLUME_SLIDER_DB_RANGE = 60;
 const VIBE_SKIP_THRESHOLD_MS = 8;
 const VIBE_CHANGE_THRESHOLD = 0.75;
 const MAX_SPECTRUM_SAMPLE_POINTS = 48;
+const invokeSafe = <T,>(command: string, args?: Record<string, unknown>) =>
+  Promise.resolve().then(() => invoke<T>(command, args));
+const listenSafe = <T,>(
+  event: string,
+  handler: (event: { payload: T }) => void
+) => Promise.resolve().then(() => listen<T>(event, handler));
 
 function App() {
   const [isPlaying, setIsPlaying] = useState(false);
@@ -61,21 +67,21 @@ function App() {
 
   const handlePlay = useCallback(() => {
     setIsPlaying(true);
-    void invoke("play");
+    void invokeSafe("play").catch(() => {});
   }, []);
   const handlePause = useCallback(() => {
     setIsPlaying(false);
-    void invoke("pause");
+    void invokeSafe("pause").catch(() => {});
   }, []);
   const handleSkipForward = useCallback(() => {
     const next = Math.min(duration, currentTime + 10);
     setCurrentTime(next);
-    void invoke("seek", { seconds: next });
+    void invokeSafe("seek", { seconds: next }).catch(() => {});
   }, [currentTime, duration]);
   const handleSkipBack = useCallback(() => {
     const prev = Math.max(0, currentTime - 10);
     setCurrentTime(prev);
-    void invoke("seek", { seconds: prev });
+    void invokeSafe("seek", { seconds: prev }).catch(() => {});
   }, [currentTime]);
 
   const handleOpenTrack = useCallback(async () => {
@@ -116,7 +122,7 @@ function App() {
 
   const handleSeek = useCallback((seconds: number) => {
     setCurrentTime(seconds);
-    void invoke("seek", { seconds });
+    void invokeSafe("seek", { seconds }).catch(() => {});
   }, []);
 
   const handleVolume = useCallback((sliderVolume: number) => {
@@ -128,7 +134,7 @@ function App() {
             10,
             (sliderVolume * VOLUME_SLIDER_DB_RANGE - VOLUME_SLIDER_DB_RANGE) / 20
           );
-    void invoke("set_volume", { volume: linearVolume });
+    void invokeSafe("set_volume", { volume: linearVolume }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -154,7 +160,7 @@ function App() {
 
       pendingVibeRef.current = true;
       const start = performance.now();
-      invoke<VibeData>("get_vibe_data")
+      invokeSafe<VibeData>("get_vibe_data")
         .then((vibe) => {
           const spectrumChanged = hasSignificantSpectrumChange(
             spectrumRef.current,
@@ -195,7 +201,7 @@ function App() {
 
   useEffect(() => {
     let disposed = false;
-    listen<LyricsEventPayload>("lyrics-line-changed", (event) => {
+    listenSafe<LyricsEventPayload>("lyrics-line-changed", (event) => {
       const index = event.payload.index;
       if (typeof index === "number" && index >= 0) {
         setActiveLyricIndex(index);
