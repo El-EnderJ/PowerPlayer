@@ -33,3 +33,13 @@ The React frontend is a "puppet" that:
 | Date | Task Completed | Next Step |
 |------|---------------|-----------|
 | 2026-02-21 | Project initialization: created Tauri + React + TS structure, README, docs, and CONTEXT.md | Build basic IPC bridge between React and Rust to load a .FLAC file |
+| 2026-02-21 | DSP pipeline implemented in Rust audio engine: DF2T biquad module, 10-band parametric EQ, pre-amp stage, soft limiter, and Tauri command to update EQ bands | Expose remaining playback + DSP controls to frontend and bind them to UI |
+
+## DSP Topology (Engine)
+
+- **Pre-Amp (global)**: applies gain in dB before EQ to create headroom.
+- **Parametric EQ**: 10 configurable bands with atomic `frequency`, `gain_db`, and `Q_factor`.
+  - Each band uses biquad filters in **Direct Form II Transposed**.
+  - Coefficients are recalculated **only when parameters change**.
+- **Soft Limiter**: final protection stage (threshold near **-0.1 dBFS**) to avoid digital clipping.
+- **Order**: `Input sample -> Pre-Amp -> ParametricEQ (L/R independent, shared params) -> Soft Limiter -> Output`.

@@ -1,3 +1,5 @@
+#[cfg(target_os = "windows")]
+use super::dsp::filters::{ParametricEQ, SoftLimiter};
 use std::{
     path::Path,
     sync::{
@@ -45,8 +47,13 @@ struct AudioEngine {
     is_playing: AtomicU8,
     should_stop: AtomicBool,
     volume_bits: AtomicU32,
+    preamp_db_bits: AtomicU32,
     output_rate_hz: AtomicU32,
     seek_frame: AtomicU32,
+    #[cfg(target_os = "windows")]
+    eq: Mutex<ParametricEQ>,
+    #[cfg(target_os = "windows")]
+    limiter: SoftLimiter,
     #[cfg(target_os = "windows")]
     stream: Mutex<Option<Stream>>,
     decoder_thread: Mutex<Option<thread::JoinHandle<()>>>,
@@ -61,8 +68,13 @@ impl AudioState {
                 is_playing: AtomicU8::new(STATE_PAUSED),
                 should_stop: AtomicBool::new(false),
                 volume_bits: AtomicU32::new(1.0_f32.to_bits()),
+                preamp_db_bits: AtomicU32::new(0.0_f32.to_bits()),
                 output_rate_hz: AtomicU32::new(48_000),
                 seek_frame: AtomicU32::new(0),
+                #[cfg(target_os = "windows")]
+                eq: Mutex::new(ParametricEQ::new(10, 48_000.0)),
+                #[cfg(target_os = "windows")]
+                limiter: SoftLimiter::new(),
                 #[cfg(target_os = "windows")]
                 stream: Mutex::new(None),
                 decoder_thread: Mutex::new(None),
@@ -107,7 +119,12 @@ impl AudioState {
         let source_channels = decoded.channels as usize;
         let output_channels = stream_config.channels as usize;
         let output_rate = stream_config.sample_rate.0;
-        self.inner.output_rate_hz.store(output_rate, Ordering::SeqCst);
+        self.inner
+            .output_rate_hz
+            .store(output_rate, Ordering::SeqCst);
+        if let Ok(mut eq) = self.inner.eq.lock() {
+            eq.set_sample_rate(output_rate as f32);
+        }
 
         let mut pcm = decoded.samples;
         if decoded.sample_rate != output_rate {
@@ -176,7 +193,7 @@ impl AudioState {
                 .build_output_stream(
                     &stream_config,
                     move |output: &mut [f32], _| {
-                        write_samples(output, &mut consumer, &callback_engine);
+                        write_samples(output, output_channels, &mut consumer, &callback_engine);
                     },
                     err_fn,
                     None,
@@ -186,7 +203,7 @@ impl AudioState {
                 .build_output_stream(
                     &stream_config,
                     move |output: &mut [i16], _| {
-                        write_samples_i16(output, &mut consumer, &callback_engine);
+                        write_samples_i16(output, output_channels, &mut consumer, &callback_engine);
                     },
                     err_fn,
                     None,
@@ -196,7 +213,7 @@ impl AudioState {
                 .build_output_stream(
                     &stream_config,
                     move |output: &mut [u16], _| {
-                        write_samples_u16(output, &mut consumer, &callback_engine);
+                        write_samples_u16(output, output_channels, &mut consumer, &callback_engine);
                     },
                     err_fn,
                     None,
@@ -247,6 +264,36 @@ impl AudioState {
             .store(clamped.to_bits(), Ordering::SeqCst);
     }
 
+    pub fn set_preamp_db(&self, preamp_db: f32) {
+        let clamped = preamp_db.clamp(-24.0, 24.0);
+        self.inner
+            .preamp_db_bits
+            .store(clamped.to_bits(), Ordering::SeqCst);
+    }
+
+    #[cfg(target_os = "windows")]
+    pub fn update_eq_band(
+        &self,
+        index: usize,
+        frequency: f32,
+        gain_db: f32,
+        q_factor: f32,
+    ) -> Result<(), String> {
+        let mut eq = self.inner.eq.lock().map_err(lock_err)?;
+        eq.update_band(index, frequency, gain_db, q_factor)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    pub fn update_eq_band(
+        &self,
+        _index: usize,
+        _frequency: f32,
+        _gain_db: f32,
+        _q_factor: f32,
+    ) -> Result<(), String> {
+        Err("EQ updates are only available on Windows targets".to_string())
+    }
+
     #[cfg(test)]
     fn playing_state(&self) -> u8 {
         self.inner.is_playing.load(Ordering::SeqCst)
@@ -255,6 +302,11 @@ impl AudioState {
     #[cfg(test)]
     fn volume(&self) -> f32 {
         f32::from_bits(self.inner.volume_bits.load(Ordering::SeqCst))
+    }
+
+    #[cfg(test)]
+    fn preamp_db(&self) -> f32 {
+        f32::from_bits(self.inner.preamp_db_bits.load(Ordering::SeqCst))
     }
 }
 
@@ -341,45 +393,131 @@ fn adapt_channels(input: &[f32], in_channels: usize, out_channels: usize) -> Vec
 }
 
 #[cfg(target_os = "windows")]
-fn write_samples(output: &mut [f32], consumer: &mut impl ringbuf::traits::Consumer<Item = f32>, engine: &AudioEngine) {
+fn write_samples(
+    output: &mut [f32],
+    channels: usize,
+    consumer: &mut impl ringbuf::traits::Consumer<Item = f32>,
+    engine: &AudioEngine,
+) {
     if engine.is_playing.load(Ordering::SeqCst) != STATE_PLAYING {
         output.fill(0.0);
         return;
     }
 
+    let preamp = db_to_gain(f32::from_bits(
+        engine.preamp_db_bits.load(Ordering::Relaxed),
+    ));
     let volume = f32::from_bits(engine.volume_bits.load(Ordering::Relaxed));
-    for out_sample in output {
-        *out_sample = consumer.try_pop().unwrap_or(0.0) * volume;
+    let mut eq = engine.eq.lock().ok();
+    let frame_channels = channels.max(1);
+    for frame in output.chunks_mut(frame_channels) {
+        let mut left = consumer.try_pop().unwrap_or(0.0) * preamp;
+        let mut right = if frame.len() > 1 {
+            consumer.try_pop().unwrap_or(0.0) * preamp
+        } else {
+            left
+        };
+        if let Some(eq) = eq.as_mut() {
+            (left, right) = eq.process_stereo_frame(left, right);
+        }
+        frame[0] = engine.limiter.process_sample(left) * volume;
+        if frame.len() > 1 {
+            frame[1] = engine.limiter.process_sample(right) * volume;
+        }
+        for out_sample in frame.iter_mut().skip(2) {
+            let sample = consumer.try_pop().unwrap_or(0.0) * preamp;
+            *out_sample = engine.limiter.process_sample(sample) * volume;
+        }
     }
 }
 
 #[cfg(target_os = "windows")]
-fn write_samples_i16(output: &mut [i16], consumer: &mut impl ringbuf::traits::Consumer<Item = f32>, engine: &AudioEngine) {
+fn write_samples_i16(
+    output: &mut [i16],
+    channels: usize,
+    consumer: &mut impl ringbuf::traits::Consumer<Item = f32>,
+    engine: &AudioEngine,
+) {
     if engine.is_playing.load(Ordering::SeqCst) != STATE_PLAYING {
         output.fill(0);
         return;
     }
 
+    let preamp = db_to_gain(f32::from_bits(
+        engine.preamp_db_bits.load(Ordering::Relaxed),
+    ));
     let volume = f32::from_bits(engine.volume_bits.load(Ordering::Relaxed));
-    for out_sample in output {
-        let sample = consumer.try_pop().unwrap_or(0.0) * volume;
-        *out_sample = (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+    let mut eq = engine.eq.lock().ok();
+    let frame_channels = channels.max(1);
+    for frame in output.chunks_mut(frame_channels) {
+        let mut left = consumer.try_pop().unwrap_or(0.0) * preamp;
+        let mut right = if frame.len() > 1 {
+            consumer.try_pop().unwrap_or(0.0) * preamp
+        } else {
+            left
+        };
+        if let Some(eq) = eq.as_mut() {
+            (left, right) = eq.process_stereo_frame(left, right);
+        }
+        let left = engine.limiter.process_sample(left) * volume;
+        frame[0] = (left.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+        if frame.len() > 1 {
+            let right = engine.limiter.process_sample(right) * volume;
+            frame[1] = (right.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+        }
+        for out_sample in frame.iter_mut().skip(2) {
+            let sample = consumer.try_pop().unwrap_or(0.0) * preamp;
+            let limited = engine.limiter.process_sample(sample) * volume;
+            *out_sample = (limited.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+        }
     }
 }
 
 #[cfg(target_os = "windows")]
-fn write_samples_u16(output: &mut [u16], consumer: &mut impl ringbuf::traits::Consumer<Item = f32>, engine: &AudioEngine) {
+fn write_samples_u16(
+    output: &mut [u16],
+    channels: usize,
+    consumer: &mut impl ringbuf::traits::Consumer<Item = f32>,
+    engine: &AudioEngine,
+) {
     if engine.is_playing.load(Ordering::SeqCst) != STATE_PLAYING {
         output.fill(u16::MAX / 2);
         return;
     }
 
+    let preamp = db_to_gain(f32::from_bits(
+        engine.preamp_db_bits.load(Ordering::Relaxed),
+    ));
     let volume = f32::from_bits(engine.volume_bits.load(Ordering::Relaxed));
-    for out_sample in output {
-        let sample = consumer.try_pop().unwrap_or(0.0) * volume;
-        let normalized = (sample.clamp(-1.0, 1.0) + 1.0) * 0.5;
-        *out_sample = (normalized * u16::MAX as f32) as u16;
+    let mut eq = engine.eq.lock().ok();
+    let frame_channels = channels.max(1);
+    for frame in output.chunks_mut(frame_channels) {
+        let mut left = consumer.try_pop().unwrap_or(0.0) * preamp;
+        let mut right = if frame.len() > 1 {
+            consumer.try_pop().unwrap_or(0.0) * preamp
+        } else {
+            left
+        };
+        if let Some(eq) = eq.as_mut() {
+            (left, right) = eq.process_stereo_frame(left, right);
+        }
+        let left = engine.limiter.process_sample(left) * volume;
+        frame[0] = (((left.clamp(-1.0, 1.0) + 1.0) * 0.5) * u16::MAX as f32) as u16;
+        if frame.len() > 1 {
+            let right = engine.limiter.process_sample(right) * volume;
+            frame[1] = (((right.clamp(-1.0, 1.0) + 1.0) * 0.5) * u16::MAX as f32) as u16;
+        }
+        for out_sample in frame.iter_mut().skip(2) {
+            let sample = consumer.try_pop().unwrap_or(0.0) * preamp;
+            let limited = engine.limiter.process_sample(sample) * volume;
+            *out_sample = (((limited.clamp(-1.0, 1.0) + 1.0) * 0.5) * u16::MAX as f32) as u16;
+        }
     }
+}
+
+#[cfg(target_os = "windows")]
+fn db_to_gain(db: f32) -> f32 {
+    10.0_f32.powf(db / 20.0)
 }
 
 #[cfg(target_os = "windows")]
@@ -408,5 +546,14 @@ mod tests {
         assert_eq!(state.playing_state(), STATE_PLAYING);
         state.pause();
         assert_eq!(state.playing_state(), STATE_PAUSED);
+    }
+
+    #[test]
+    fn preamp_is_clamped() {
+        let state = AudioState::new();
+        state.set_preamp_db(30.0);
+        assert_eq!(state.preamp_db(), 24.0);
+        state.set_preamp_db(-30.0);
+        assert_eq!(state.preamp_db(), -24.0);
     }
 }
