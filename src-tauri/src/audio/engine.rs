@@ -36,6 +36,8 @@ use super::decoder::{decode_file, resample_linear, DecodedTrack};
 
 const STATE_PAUSED: u8 = 0;
 const STATE_PLAYING: u8 = 1;
+const NO_ACTIVE_LYRIC: u32 = u32::MAX;
+const LYRICS_POLL_INTERVAL_MS: u64 = 40;
 /// Sample history used by the visualizer FFT.
 /// 4096 mono samples balance frequency detail while keeping visual updates responsive.
 const VIBE_WINDOW_SAMPLES: usize = 4096;
@@ -98,7 +100,7 @@ impl AudioState {
                 vibe_amplitude_bits: AtomicU32::new(0.0_f32.to_bits()),
                 vibe_samples: Mutex::new(VecDeque::with_capacity(VIBE_WINDOW_SAMPLES)),
                 lyrics: Mutex::new(Vec::new()),
-                active_lyric_index: AtomicU32::new(u32::MAX),
+                active_lyric_index: AtomicU32::new(NO_ACTIVE_LYRIC),
                 eq: Mutex::new(ParametricEQ::new(10, 48_000.0)),
                 #[cfg(target_os = "windows")]
                 limiter: SoftLimiter::new(),
@@ -120,7 +122,7 @@ impl AudioState {
         self.inner.current_frame.store(0, Ordering::SeqCst);
         self.inner
             .active_lyric_index
-            .store(u32::MAX, Ordering::SeqCst);
+            .store(NO_ACTIVE_LYRIC, Ordering::SeqCst);
 
         if let Some(handle) = self.inner.decoder_thread.lock().map_err(lock_err)?.take() {
             let _ = handle.join();
@@ -313,7 +315,7 @@ impl AudioState {
         self.inner.current_frame.store(frame, Ordering::SeqCst);
         self.inner
             .active_lyric_index
-            .store(u32::MAX, Ordering::SeqCst);
+            .store(NO_ACTIVE_LYRIC, Ordering::SeqCst);
     }
 
     pub fn set_volume(&self, volume: f32) {
@@ -380,7 +382,7 @@ impl AudioState {
         }
         self.inner
             .active_lyric_index
-            .store(u32::MAX, Ordering::SeqCst);
+            .store(NO_ACTIVE_LYRIC, Ordering::SeqCst);
     }
 
     pub fn get_lyrics_lines(&self) -> Vec<LyricsLine> {
@@ -413,13 +415,13 @@ impl AudioState {
             let rate = engine.output_rate_hz.load(Ordering::Relaxed).max(1);
             let frame = engine.current_frame.load(Ordering::Relaxed);
             let now_ms = ((frame as u64) * 1000 / (rate as u64)) as u32;
-            let index = lyrics
-                .iter()
-                .enumerate()
-                .rev()
-                .find(|(_, line)| line.timestamp <= now_ms)
-                .map(|(i, _)| i);
-            let current_idx = index.map(|i| i as u32).unwrap_or(u32::MAX);
+            // `Err(next)` means insertion point for `now_ms`, so the active lyric is `next - 1`.
+            let index = match lyrics.binary_search_by(|line| line.timestamp.cmp(&now_ms)) {
+                Ok(found) => Some(found),
+                Err(0) => None,
+                Err(next) => Some(next - 1),
+            };
+            let current_idx = index.map(|i| i as u32).unwrap_or(NO_ACTIVE_LYRIC);
             if engine
                 .active_lyric_index
                 .swap(current_idx, Ordering::SeqCst)
@@ -439,7 +441,7 @@ impl AudioState {
                     });
                 let _ = app.emit("lyrics-line-changed", payload);
             }
-            thread::sleep(std::time::Duration::from_millis(40));
+            thread::sleep(std::time::Duration::from_millis(LYRICS_POLL_INTERVAL_MS));
         });
         *self.inner.lyric_monitor_thread.lock().map_err(lock_err)? = Some(handle);
         Ok(())

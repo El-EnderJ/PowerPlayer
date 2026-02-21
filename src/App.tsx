@@ -37,6 +37,7 @@ interface LyricsEventPayload {
 const VOLUME_SLIDER_DB_RANGE = 60;
 const VIBE_SKIP_THRESHOLD_MS = 8;
 const VIBE_CHANGE_THRESHOLD = 0.75;
+const MAX_SPECTRUM_SAMPLE_POINTS = 48;
 
 function App() {
   const [isPlaying, setIsPlaying] = useState(false);
@@ -56,6 +57,7 @@ function App() {
   const amplitudeRef = useRef(0);
   const spectrumRef = useRef<number[]>([]);
   const activeArtUrlRef = useRef<string | null>(null);
+  const lyricsUnlistenRef = useRef<(() => void) | null>(null);
 
   const handlePlay = useCallback(() => {
     setIsPlaying(true);
@@ -192,7 +194,7 @@ function App() {
   );
 
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
+    let disposed = false;
     listen<LyricsEventPayload>("lyrics-line-changed", (event) => {
       const index = event.payload.index;
       if (typeof index === "number" && index >= 0) {
@@ -202,11 +204,17 @@ function App() {
       }
     })
       .then((cleanup) => {
-        unlisten = cleanup;
+        lyricsUnlistenRef.current = cleanup;
+        if (disposed) {
+          cleanup();
+          lyricsUnlistenRef.current = null;
+        }
       })
       .catch(() => {});
     return () => {
-      unlisten?.();
+      disposed = true;
+      lyricsUnlistenRef.current?.();
+      lyricsUnlistenRef.current = null;
     };
   }, []);
 
@@ -304,7 +312,7 @@ function hasSignificantSpectrumChange(previous: number[], next: number[]): boole
   if (!next.length) {
     return false;
   }
-  const step = Math.max(1, Math.floor(next.length / 48));
+  const step = Math.max(1, Math.floor(next.length / MAX_SPECTRUM_SAMPLE_POINTS));
   for (let i = 0; i < next.length; i += step) {
     if (Math.abs(previous[i] - next[i]) > VIBE_CHANGE_THRESHOLD) {
       return true;

@@ -13,6 +13,8 @@ interface LyricsViewProps {
 }
 
 const LINE_HEIGHT = 52;
+const LYRICS_VIEW_HEIGHT_VH = 52;
+const VERTICAL_CENTER_OFFSET = 2;
 
 export default function LyricsView({ lines, activeIndex, fallback }: LyricsViewProps) {
   if (!lines.length) {
@@ -26,10 +28,13 @@ export default function LyricsView({ lines, activeIndex, fallback }: LyricsViewP
     );
   }
 
-  const offset = -(activeIndex * LINE_HEIGHT) + LINE_HEIGHT * 2;
+  const offset = -(activeIndex * LINE_HEIGHT) + LINE_HEIGHT * VERTICAL_CENTER_OFFSET;
 
   return (
-    <div className="relative h-[52vh] w-full max-w-4xl overflow-hidden rounded-2xl border border-white/10 bg-black/30 p-6 backdrop-blur-xl">
+    <div
+      className="relative w-full max-w-4xl overflow-hidden rounded-2xl border border-white/10 bg-black/30 p-6 backdrop-blur-xl"
+      style={{ height: `${LYRICS_VIEW_HEIGHT_VH}vh` }}
+    >
       <motion.div
         animate={{ y: offset }}
         transition={{ type: "spring", stiffness: 130, damping: 24 }}

@@ -68,6 +68,9 @@ fn parse_line(line: &str) -> Vec<LyricsLine> {
 fn parse_timestamp(value: &str) -> Option<u32> {
     let mut parts = value.split(':');
     let minutes = parts.next()?.trim().parse::<u32>().ok()?;
+    if minutes > 6_000 {
+        return None;
+    }
     let sec_fraction = parts.next()?.trim();
     if parts.next().is_some() {
         return None;
