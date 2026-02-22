@@ -24,6 +24,7 @@ interface DynamicPillProps {
     artUrl?: string;
   };
   onScanLibrary?: () => void;
+  onTrackClick?: () => void;
 }
 
 const TABS: { id: PillTab; icon: typeof LayoutGrid; label: string }[] = [
@@ -40,6 +41,7 @@ function DynamicPill({
   onPlayPause,
   currentTrack,
   onScanLibrary,
+  onTrackClick,
 }: DynamicPillProps) {
   const hasTrack = !!currentTrack;
   const [hoveredTab, setHoveredTab] = useState<PillTab | null>(null);
@@ -75,8 +77,12 @@ function DynamicPill({
             exit={{ opacity: 0, width: 0 }}
             className="flex items-center gap-2 overflow-hidden pr-2 mr-1 border-r border-white/10"
           >
-            {/* Mini cover art */}
-            <div className="h-8 w-8 flex-shrink-0 overflow-hidden rounded-lg bg-white/10 md:h-10 md:w-10">
+            {/* Mini cover art – clickable to open full player */}
+            <motion.div
+              layoutId="track-art"
+              className="h-8 w-8 flex-shrink-0 cursor-pointer overflow-hidden rounded-lg bg-white/10 md:h-10 md:w-10"
+              onClick={onTrackClick}
+            >
               {currentTrack.artUrl ? (
                 <img
                   src={currentTrack.artUrl}
@@ -94,12 +100,13 @@ function DynamicPill({
                   </svg>
                 </div>
               )}
-            </div>
+            </motion.div>
 
-            {/* Scrolling title */}
+            {/* Scrolling title – clickable to open full player */}
             <motion.span
-              className="max-w-[120px] truncate text-xs font-medium text-white md:max-w-[160px] md:text-sm"
+              className="max-w-[120px] cursor-pointer truncate text-xs font-medium text-white md:max-w-[160px] md:text-sm"
               title={currentTrack.title}
+              onClick={onTrackClick}
             >
               {currentTrack.title}
             </motion.span>
