@@ -7,7 +7,6 @@ import {
   Settings,
   Play,
   Pause,
-  FolderOpen,
   SlidersHorizontal as AudioIcon,
   FolderSearch,
   Info,
@@ -24,8 +23,6 @@ interface DynamicPillProps {
     title: string;
     artUrl?: string;
   };
-  libraryEmpty?: boolean;
-  onSelectLibrary?: () => void;
   onScanLibrary?: () => void;
 }
 
@@ -42,8 +39,6 @@ function DynamicPill({
   isPlaying,
   onPlayPause,
   currentTrack,
-  libraryEmpty = false,
-  onSelectLibrary,
   onScanLibrary,
 }: DynamicPillProps) {
   const hasTrack = !!currentTrack;
@@ -66,27 +61,10 @@ function DynamicPill({
   return (
     <motion.div
       layout
-      className="fixed bottom-8 left-1/2 z-50 flex -translate-x-1/2 items-center gap-1.5 rounded-full border-t border-white/10 border-b-black/40 bg-white/5 px-4 py-2.5 shadow-[0_20px_50px_rgba(0,0,0,0.5)] backdrop-blur-[40px] saturate-[180%] md:gap-2 md:px-6 md:py-3.5"
+      className="liquid-glass fixed bottom-8 left-1/2 z-50 flex -translate-x-1/2 items-center gap-1.5 rounded-full px-4 py-2.5 md:gap-2 md:px-6 md:py-3.5"
       transition={{ layout: { type: "spring", stiffness: 400, damping: 30 } }}
       animate={hoveredTab ? { scale: 1.03 } : { scale: 1 }}
     >
-      {/* Library empty state button */}
-      <AnimatePresence>
-        {libraryEmpty && onSelectLibrary && (
-          <motion.button
-            type="button"
-            initial={{ opacity: 0, width: 0 }}
-            animate={{ opacity: 1, width: "auto" }}
-            exit={{ opacity: 0, width: 0 }}
-            onClick={onSelectLibrary}
-            className="mr-1 flex items-center gap-2 overflow-hidden rounded-full border border-cyan-500/30 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-300 transition-colors hover:bg-cyan-500/20 md:px-4 md:py-2 md:text-sm"
-          >
-            <FolderOpen size={14} className="md:h-4 md:w-4" />
-            <span className="whitespace-nowrap">📂 Seleccionar Biblioteca</span>
-          </motion.button>
-        )}
-      </AnimatePresence>
-
       {/* Now-playing mini section */}
       <AnimatePresence>
         {hasTrack && (
