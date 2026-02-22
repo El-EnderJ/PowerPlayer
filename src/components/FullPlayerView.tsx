@@ -1,7 +1,16 @@
 import { memo, useMemo, useCallback, useRef, useState, useEffect } from "react";
-import { motion } from "framer-motion";
-import { Shuffle, Repeat, Timer, SkipBack, SkipForward } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import { Shuffle, Repeat, Timer, SkipBack, SkipForward, Mic2, Box } from "lucide-react";
 import { useAudioIPC } from "../hooks/useAudioIPC";
+import LyricsEngine from "./LyricsEngine";
+import SpatialRoom from "./SpatialRoom";
+
+type FullPlayerMode = "art" | "lyrics" | "spatial";
+
+interface LyricsLine {
+  timestamp: number;
+  text: string;
+}
 
 interface FullPlayerViewProps {
   albumArt?: string;
@@ -11,6 +20,10 @@ interface FullPlayerViewProps {
   isPlaying: boolean;
   currentTime: number;
   duration: number;
+  lyricsLines?: LyricsLine[];
+  neonColor?: string;
+  /** External signal to toggle lyrics mode (from minimalist pill) */
+  requestLyricsMode?: boolean;
   onPlayPause: () => void;
   onSkipBack: () => void;
   onSkipForward: () => void;
@@ -54,6 +67,9 @@ function FullPlayerView({
   isPlaying,
   currentTime,
   duration,
+  lyricsLines = [],
+  neonColor,
+  requestLyricsMode,
   onPlayPause,
   onSkipBack,
   onSkipForward,
@@ -61,6 +77,14 @@ function FullPlayerView({
   onClose,
 }: FullPlayerViewProps) {
   const { invokeSafe } = useAudioIPC();
+  const [mode, setMode] = useState<FullPlayerMode>("art");
+
+  // React to external lyrics toggle from minimalist pill
+  useEffect(() => {
+    if (requestLyricsMode !== undefined) {
+      setMode((prev) => (prev === "lyrics" ? "art" : "lyrics"));
+    }
+  }, [requestLyricsMode]);
   const fallbackWaveform = useMemo(
     () => generateWaveform(trackTitle + trackArtist, WAVEFORM_BARS),
     [trackTitle, trackArtist]
@@ -212,24 +236,91 @@ function FullPlayerView({
 
       {/* Content container – scrollable if needed, centered */}
       <div className="flex w-full max-w-xl flex-1 flex-col items-center justify-center gap-5 px-6 pb-32 pt-12">
-        {/* ── 2. Cover Art ── */}
-        <motion.div
-          layoutId="track-art"
-          className="relative aspect-square w-full max-w-[22rem] overflow-hidden rounded-[2rem] shadow-2xl"
-          style={{
-            boxShadow: "0 30px 80px -10px rgba(0,0,0,0.6), 0 0 60px -15px rgba(139,92,246,0.35)",
-          }}
-        >
-          {albumArt ? (
-            <img src={albumArt} alt="Album art" className="h-full w-full object-cover" />
-          ) : (
-            <div className="flex h-full w-full items-center justify-center bg-white/5">
-              <svg className="h-20 w-20 text-white/20" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z" />
-              </svg>
-            </div>
+        {/* ── Mode selector tabs ── */}
+        <div className="flex items-center gap-2 rounded-full bg-white/5 p-1 backdrop-blur-md">
+          {([
+            { id: "art" as FullPlayerMode, label: "Arte" },
+            { id: "lyrics" as FullPlayerMode, label: "Letras", icon: Mic2 },
+            { id: "spatial" as FullPlayerMode, label: "Escenario 3D", icon: Box },
+          ]).map((tab) => {
+            const isActive = mode === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setMode(tab.id)}
+                className={`flex items-center gap-1.5 rounded-full px-4 py-1.5 text-xs font-medium transition-all ${
+                  isActive ? "bg-white/15 text-white shadow-sm" : "text-white/50 hover:text-white/80"
+                }`}
+              >
+                {tab.icon && <tab.icon size={13} />}
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* ── 2. Central content area with mode transitions ── */}
+        <AnimatePresence mode="wait">
+          {mode === "art" && (
+            <motion.div
+              key="art"
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{ duration: 0.35, ease: "easeOut" }}
+              className="flex w-full flex-col items-center gap-5"
+            >
+              <motion.div
+                layoutId="track-art"
+                className="relative aspect-square w-full max-w-[22rem] overflow-hidden rounded-[2rem] shadow-2xl"
+                style={{
+                  boxShadow: "0 30px 80px -10px rgba(0,0,0,0.6), 0 0 60px -15px rgba(139,92,246,0.35)",
+                }}
+              >
+                {albumArt ? (
+                  <img src={albumArt} alt="Album art" className="h-full w-full object-cover" />
+                ) : (
+                  <div className="flex h-full w-full items-center justify-center bg-white/5">
+                    <svg className="h-20 w-20 text-white/20" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z" />
+                    </svg>
+                  </div>
+                )}
+              </motion.div>
+            </motion.div>
           )}
-        </motion.div>
+
+          {mode === "lyrics" && (
+            <motion.div
+              key="lyrics"
+              initial={{ opacity: 0, y: 30 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              transition={{ type: "spring", stiffness: 200, damping: 24 }}
+              className="w-full"
+              style={{ height: "22rem" }}
+            >
+              <LyricsEngine
+                lines={lyricsLines}
+                currentTime={currentTime}
+                neonColor={neonColor}
+              />
+            </motion.div>
+          )}
+
+          {mode === "spatial" && (
+            <motion.div
+              key="spatial"
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              transition={{ type: "spring", stiffness: 200, damping: 22 }}
+            >
+              <SpatialRoom />
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Track info */}
         <div className="w-full text-center">

@@ -46,6 +46,12 @@ const VIBE_SKIP_THRESHOLD_MS = 8;
 const VIBE_CHANGE_THRESHOLD = 0.75;
 const MAX_SPECTRUM_SAMPLE_POINTS = 48;
 
+function formatTimeApp(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
 function App() {
   const { invokeSafe, listenSafe } = useAudioIPC();
   const {
@@ -74,6 +80,7 @@ function App() {
   const [activeView, setActiveView] = useState<PillTab>("library");
   const [libraryEmpty, setLibraryEmpty] = useState(false);
   const [showFullPlayer, setShowFullPlayer] = useState(false);
+  const [fullPlayerLyricsRequested, setFullPlayerLyricsRequested] = useState(false);
   const [activeTrackPath, setActiveTrackPath] = useState<string | undefined>(undefined);
   const pendingVibeRef = useRef(false);
   const skipFrameRef = useRef(false);
@@ -489,6 +496,8 @@ function App() {
             isPlaying={isPlaying}
             currentTime={currentTime}
             duration={duration}
+            lyricsLines={lyricsLines}
+            requestLyricsMode={fullPlayerLyricsRequested}
             onPlayPause={handlePlayPause}
             onSkipBack={handleSkipBack}
             onSkipForward={handleSkipForward}
@@ -507,6 +516,10 @@ function App() {
         currentTrack={currentTrackForPill}
         onScanLibrary={handleSelectLibrary}
         onTrackClick={() => currentTrackForPill && setShowFullPlayer(true)}
+        fullPlayerOpen={showFullPlayer}
+        remainingTime={showFullPlayer && duration > 0 ? `-${formatTimeApp(duration - currentTime)}` : undefined}
+        onToggleLyrics={showFullPlayer ? () => setFullPlayerLyricsRequested((p) => !p) : undefined}
+        onCloseFullPlayer={showFullPlayer ? () => setShowFullPlayer(false) : undefined}
       />
 
       {showFps ? (
