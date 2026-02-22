@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import { toPng } from "html-to-image";
 import FluidBackground from "./components/FluidBackground";
 import LyricsView from "./components/LyricsView";
 import PlaybackControls from "./components/PlaybackControls";
@@ -42,6 +43,39 @@ const VOLUME_SLIDER_DB_RANGE = 60;
 const VIBE_SKIP_THRESHOLD_MS = 8;
 const VIBE_CHANGE_THRESHOLD = 0.75;
 const MAX_SPECTRUM_SAMPLE_POINTS = 48;
+const SCREENSHOT_VIEWS: { tab: PillTab; selector: string; fileName: string }[] = [
+  {
+    tab: "library",
+    selector: '[data-export-view="library"]',
+    fileName: "PowerPlayer_Library_Glass.png",
+  },
+  {
+    tab: "eq",
+    selector: '[data-export-view="eq"]',
+    fileName: "PowerPlayer_EQ_Glass.png",
+  },
+  {
+    tab: "search",
+    selector: '[data-export-view="search"]',
+    fileName: "PowerPlayer_Search_Glass.png",
+  },
+];
+
+declare global {
+  interface Window {
+    exportPowerPlayerScreenshots?: () => Promise<void>;
+  }
+}
+
+const waitFor = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function downloadPng(dataUrl: string, fileName: string) {
+  const link = document.createElement("a");
+  link.href = dataUrl;
+  link.download = fileName;
+  link.click();
+}
+
 const invokeSafe = <T,>(command: string, args?: Record<string, unknown>) =>
   Promise.resolve().then(() => invoke<T>(command, args));
 const listenSafe = <T,>(
@@ -64,6 +98,7 @@ function App() {
   const [activeLyricIndex, setActiveLyricIndex] = useState(0);
   const [activeView, setActiveView] = useState<PillTab>("library");
   const [libraryEmpty, setLibraryEmpty] = useState(false);
+  const exportInProgressRef = useRef(false);
   const pendingVibeRef = useRef(false);
   const skipFrameRef = useRef(false);
   const amplitudeRef = useRef(0);
@@ -300,6 +335,34 @@ function App() {
   }, []);
 
   const showFps = import.meta.env.DEV;
+  const exportMainViewScreenshots = useCallback(async () => {
+    if (exportInProgressRef.current) return;
+    exportInProgressRef.current = true;
+    const previousView = activeView;
+    try {
+      for (const view of SCREENSHOT_VIEWS) {
+        setActiveView(view.tab);
+        await waitFor(650);
+        const node = document.querySelector(view.selector);
+        if (!(node instanceof HTMLElement)) {
+          throw new Error(`View not found for selector: ${view.selector}`);
+        }
+        const dataUrl = await toPng(node, { pixelRatio: 2, cacheBust: true });
+        downloadPng(dataUrl, view.fileName);
+        await waitFor(250);
+      }
+    } finally {
+      setActiveView(previousView);
+      exportInProgressRef.current = false;
+    }
+  }, [activeView]);
+
+  useEffect(() => {
+    window.exportPowerPlayerScreenshots = exportMainViewScreenshots;
+    return () => {
+      delete window.exportPowerPlayerScreenshots;
+    };
+  }, [exportMainViewScreenshots]);
 
   return (
     <div className="noise-bg h-screen w-screen overflow-hidden bg-[#0a0a0c] text-white">
@@ -322,6 +385,7 @@ function App() {
         {activeView === "library" ? (
           <motion.div
             key="library"
+            data-export-view="library"
             initial={{ opacity: 0, y: 40, filter: "blur(0px)" }}
             animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
             exit={{ opacity: 0, filter: "blur(8px)" }}
@@ -341,6 +405,7 @@ function App() {
         ) : activeView === "eq" ? (
           <motion.div
             key="eq"
+            data-export-view="eq"
             initial={{ opacity: 0, y: 40, filter: "blur(0px)" }}
             animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
             exit={{ opacity: 0, filter: "blur(8px)" }}
@@ -355,6 +420,7 @@ function App() {
         ) : activeView === "search" ? (
           <motion.div
             key="search"
+            data-export-view="search"
             initial={{ opacity: 0, y: 40, filter: "blur(0px)" }}
             animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
             exit={{ opacity: 0, filter: "blur(8px)" }}
@@ -468,9 +534,22 @@ function App() {
       />
 
       {showFps ? (
-        <div className="pointer-events-none fixed right-3 top-3 rounded bg-black/50 px-2 py-1 text-xs text-white/80">
-          {fps} FPS
-        </div>
+        <>
+          <div className="pointer-events-none fixed right-3 top-3 rounded bg-black/50 px-2 py-1 text-xs text-white/80">
+            {fps} FPS
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              void exportMainViewScreenshots();
+            }}
+            className="fixed left-3 top-3 rounded px-2 py-1 text-[10px] text-transparent opacity-0"
+            aria-label="Export screenshots"
+            title="Export screenshots"
+          >
+            Export
+          </button>
+        </>
       ) : null}
     </div>
   );
