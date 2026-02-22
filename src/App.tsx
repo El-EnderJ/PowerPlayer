@@ -43,6 +43,8 @@ const VOLUME_SLIDER_DB_RANGE = 60;
 const VIBE_SKIP_THRESHOLD_MS = 8;
 const VIBE_CHANGE_THRESHOLD = 0.75;
 const MAX_SPECTRUM_SAMPLE_POINTS = 48;
+const VIEW_CAPTURE_DELAY_MS = 650;
+const DOWNLOAD_SPACING_DELAY_MS = 250;
 const SCREENSHOT_VIEWS: { tab: PillTab; selector: string; fileName: string }[] = [
   {
     tab: "library",
@@ -70,10 +72,18 @@ declare global {
 const waitFor = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function downloadPng(dataUrl: string, fileName: string) {
+  if (!dataUrl.startsWith("data:image/png")) {
+    throw new Error("Invalid PNG data URL for screenshot download");
+  }
+  if (!fileName.endsWith(".png")) {
+    throw new Error("Screenshot filename must end with .png");
+  }
   const link = document.createElement("a");
   link.href = dataUrl;
   link.download = fileName;
+  document.body.appendChild(link);
   link.click();
+  document.body.removeChild(link);
 }
 
 const invokeSafe = <T,>(command: string, args?: Record<string, unknown>) =>
@@ -336,20 +346,36 @@ function App() {
 
   const showFps = import.meta.env.DEV;
   const exportMainViewScreenshots = useCallback(async () => {
-    if (exportInProgressRef.current) return;
+    if (exportInProgressRef.current) {
+      if (import.meta.env.DEV) {
+        console.info("Screenshot export already in progress");
+      }
+      return;
+    }
     exportInProgressRef.current = true;
     const previousView = activeView;
     try {
       for (const view of SCREENSHOT_VIEWS) {
         setActiveView(view.tab);
-        await waitFor(650);
+        await waitFor(VIEW_CAPTURE_DELAY_MS);
         const node = document.querySelector(view.selector);
         if (!(node instanceof HTMLElement)) {
-          throw new Error(`View not found for selector: ${view.selector}`);
+          throw new Error(
+            `Failed to find ${view.tab} view using selector: ${view.selector}. Retry after the view finishes rendering.`
+          );
         }
-        const dataUrl = await toPng(node, { pixelRatio: 2, cacheBust: true });
+        let dataUrl: string;
+        try {
+          dataUrl = await toPng(node, { pixelRatio: 2, cacheBust: true });
+        } catch (error) {
+          throw new Error(
+            `Failed to export screenshot for ${view.tab}. ${
+              error instanceof Error ? error.message : "Unknown capture error"
+            }`
+          );
+        }
         downloadPng(dataUrl, view.fileName);
-        await waitFor(250);
+        await waitFor(DOWNLOAD_SPACING_DELAY_MS);
       }
     } finally {
       setActiveView(previousView);
@@ -543,7 +569,7 @@ function App() {
             onClick={() => {
               void exportMainViewScreenshots();
             }}
-            className="fixed left-3 top-3 rounded px-2 py-1 text-[10px] text-transparent opacity-0"
+            className="fixed left-3 top-3 rounded border border-white/10 bg-black/20 px-2 py-1 text-[10px] text-white/40 opacity-20 transition hover:opacity-80"
             aria-label="Export screenshots"
             title="Export screenshots"
           >
