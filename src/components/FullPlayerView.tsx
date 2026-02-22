@@ -103,6 +103,7 @@ function FullPlayerView({
     void invokeSafe<number[]>("extract_waveform", { path: activeTrackPath, points: WAVEFORM_BARS })
       .then((data) => {
         if (!cancelled && Array.isArray(data) && data.length) {
+          // Defensive clamp in case stale/corrupt cache data falls outside normalized range.
           setWaveformData(data.map((value) => Math.max(0, Math.min(1, Number(value) || 0))));
         }
       })

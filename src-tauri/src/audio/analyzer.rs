@@ -53,10 +53,7 @@ fn compute_waveform(samples: &[f32], channels: usize, points: usize) -> Vec<f32>
         out.push(rms);
     }
 
-    let max = out
-        .iter()
-        .copied()
-        .fold(0.0_f32, |acc, value| if value > acc { value } else { acc });
+    let max = out.iter().copied().fold(0.0_f32, f32::max);
     if max > 0.0 {
         for value in &mut out {
             *value /= max;
