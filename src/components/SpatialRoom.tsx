@@ -178,7 +178,10 @@ export default function SpatialRoom() {
               }}
               onPointerDown={(e) => {
                 e.preventDefault();
-                (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+                const el = e.target as HTMLElement;
+                if (el.setPointerCapture) {
+                  el.setPointerCapture(e.pointerId);
+                }
                 setDragging(src.id);
               }}
             >

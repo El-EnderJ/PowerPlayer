@@ -15,14 +15,14 @@ interface LyricsEngineProps {
 
 /** Find the active lyric line index based on current playback time. */
 function findActiveLine(lines: LyricsLine[], time: number): number {
-  let idx = 0;
+  let activeLineIndex = 0;
   for (let i = lines.length - 1; i >= 0; i--) {
     if (time >= lines[i].timestamp) {
-      idx = i;
+      activeLineIndex = i;
       break;
     }
   }
-  return idx;
+  return activeLineIndex;
 }
 
 const LINE_HEIGHT_PX = 80;

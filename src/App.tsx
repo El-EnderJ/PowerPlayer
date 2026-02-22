@@ -80,6 +80,7 @@ function App() {
   const [activeView, setActiveView] = useState<PillTab>("library");
   const [libraryEmpty, setLibraryEmpty] = useState(false);
   const [showFullPlayer, setShowFullPlayer] = useState(false);
+  const [fullPlayerLyricsRequested, setFullPlayerLyricsRequested] = useState(false);
   const [activeTrackPath, setActiveTrackPath] = useState<string | undefined>(undefined);
   const pendingVibeRef = useRef(false);
   const skipFrameRef = useRef(false);
@@ -496,6 +497,7 @@ function App() {
             currentTime={currentTime}
             duration={duration}
             lyricsLines={lyricsLines}
+            requestLyricsMode={fullPlayerLyricsRequested}
             onPlayPause={handlePlayPause}
             onSkipBack={handleSkipBack}
             onSkipForward={handleSkipForward}
@@ -516,7 +518,7 @@ function App() {
         onTrackClick={() => currentTrackForPill && setShowFullPlayer(true)}
         fullPlayerOpen={showFullPlayer}
         remainingTime={showFullPlayer && duration > 0 ? `-${formatTimeApp(duration - currentTime)}` : undefined}
-        onToggleLyrics={showFullPlayer ? () => {} : undefined}
+        onToggleLyrics={showFullPlayer ? () => setFullPlayerLyricsRequested((p) => !p) : undefined}
         onCloseFullPlayer={showFullPlayer ? () => setShowFullPlayer(false) : undefined}
       />
 

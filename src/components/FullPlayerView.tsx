@@ -22,6 +22,8 @@ interface FullPlayerViewProps {
   duration: number;
   lyricsLines?: LyricsLine[];
   neonColor?: string;
+  /** External signal to toggle lyrics mode (from minimalist pill) */
+  requestLyricsMode?: boolean;
   onPlayPause: () => void;
   onSkipBack: () => void;
   onSkipForward: () => void;
@@ -67,6 +69,7 @@ function FullPlayerView({
   duration,
   lyricsLines = [],
   neonColor,
+  requestLyricsMode,
   onPlayPause,
   onSkipBack,
   onSkipForward,
@@ -75,6 +78,13 @@ function FullPlayerView({
 }: FullPlayerViewProps) {
   const { invokeSafe } = useAudioIPC();
   const [mode, setMode] = useState<FullPlayerMode>("art");
+
+  // React to external lyrics toggle from minimalist pill
+  useEffect(() => {
+    if (requestLyricsMode !== undefined) {
+      setMode((prev) => (prev === "lyrics" ? "art" : "lyrics"));
+    }
+  }, [requestLyricsMode]);
   const fallbackWaveform = useMemo(
     () => generateWaveform(trackTitle + trackArtist, WAVEFORM_BARS),
     [trackTitle, trackArtist]
