@@ -5,7 +5,14 @@ interface FluidBackgroundProps {
   albumArt?: string;
 }
 
-/** Extract 3 dominant colours from an image using a small canvas sample. */
+const DEFAULT_COLORS = [
+  "rgba(88,28,135,0.3)",
+  "rgba(14,116,144,0.3)",
+  "rgba(30,27,75,0.3)",
+];
+const DEFAULT_BUCKET_COLOR = "rgba(30,20,60,0.3)";
+
+/** Extract 3 dominant colors from an image using a small canvas sample. */
 function extractColors(src: string): Promise<string[]> {
   return new Promise((resolve) => {
     const img = new Image();
@@ -17,13 +24,13 @@ function extractColors(src: string): Promise<string[]> {
       canvas.height = size;
       const ctx = canvas.getContext("2d");
       if (!ctx) {
-        resolve(["#581c87", "#0e7490", "#1e1b4b"]);
+        resolve(DEFAULT_COLORS);
         return;
       }
       ctx.drawImage(img, 0, 0, size, size);
       const data = ctx.getImageData(0, 0, size, size).data;
 
-      // Simple k-bucket quantisation into 3 colour clusters
+      // Simple k-bucket quantization into 3 color clusters
       const buckets: { r: number; g: number; b: number; count: number }[] = [
         { r: 0, g: 0, b: 0, count: 0 },
         { r: 0, g: 0, b: 0, count: 0 },
@@ -44,7 +51,7 @@ function extractColors(src: string): Promise<string[]> {
       }
 
       const colors = buckets.map((b) => {
-        if (b.count === 0) return "rgba(30,20,60,0.3)";
+        if (b.count === 0) return DEFAULT_BUCKET_COLOR;
         const r = Math.round(b.r / b.count);
         const g = Math.round(b.g / b.count);
         const bl = Math.round(b.b / b.count);
@@ -52,17 +59,13 @@ function extractColors(src: string): Promise<string[]> {
       });
       resolve(colors);
     };
-    img.onerror = () => resolve(["rgba(88,28,135,0.3)", "rgba(14,116,144,0.3)", "rgba(30,27,75,0.3)"]);
+    img.onerror = () => resolve(DEFAULT_COLORS);
     img.src = src;
   });
 }
 
 export default function FluidBackground({ albumArt }: FluidBackgroundProps) {
-  const [colors, setColors] = useState<string[]>([
-    "rgba(88,28,135,0.3)",
-    "rgba(14,116,144,0.3)",
-    "rgba(30,27,75,0.3)",
-  ]);
+  const [colors, setColors] = useState<string[]>(DEFAULT_COLORS);
   const prevArtRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
@@ -71,7 +74,7 @@ export default function FluidBackground({ albumArt }: FluidBackgroundProps) {
       extractColors(albumArt).then(setColors);
     } else if (!albumArt) {
       prevArtRef.current = undefined;
-      setColors(["rgba(88,28,135,0.3)", "rgba(14,116,144,0.3)", "rgba(30,27,75,0.3)"]);
+      setColors(DEFAULT_COLORS);
     }
   }, [albumArt]);
 
@@ -87,7 +90,7 @@ export default function FluidBackground({ albumArt }: FluidBackgroundProps) {
           className="absolute inset-0"
           style={{ filter: "blur(120px)" }}
         >
-          {/* Colour blob 1 */}
+          {/* Color blob 1 */}
           <motion.div
             animate={{
               x: ["0%", "15%", "-10%", "0%"],
@@ -98,7 +101,7 @@ export default function FluidBackground({ albumArt }: FluidBackgroundProps) {
             className="absolute left-[10%] top-[15%] h-[60%] w-[60%] rounded-full"
             style={{ background: `radial-gradient(circle, ${colors[0]} 0%, transparent 70%)` }}
           />
-          {/* Colour blob 2 */}
+          {/* Color blob 2 */}
           <motion.div
             animate={{
               x: ["0%", "-20%", "10%", "0%"],
@@ -109,7 +112,7 @@ export default function FluidBackground({ albumArt }: FluidBackgroundProps) {
             className="absolute right-[5%] top-[20%] h-[55%] w-[55%] rounded-full"
             style={{ background: `radial-gradient(circle, ${colors[1]} 0%, transparent 70%)` }}
           />
-          {/* Colour blob 3 */}
+          {/* Color blob 3 */}
           <motion.div
             animate={{
               x: ["0%", "12%", "-8%", "0%"],
