@@ -12,6 +12,7 @@ import DynamicPill, { type PillTab } from "./components/DynamicPill";
 import LibraryView from "./components/LibraryView";
 import SearchView from "./components/SearchView";
 import SettingsView from "./components/SettingsView";
+import WelcomeView from "./components/WelcomeView";
 
 interface TrackData {
   artist: string;
@@ -304,18 +305,6 @@ function App() {
 
   return (
     <div className="noise-bg h-screen w-screen overflow-hidden bg-[#0a0a0c] text-white">
-      {/* Ambient background from album art */}
-      {albumArt && (
-        <div
-          className="pointer-events-none fixed inset-0 -z-10 opacity-20 blur-3xl"
-          style={{
-            backgroundImage: `url(${albumArt})`,
-            backgroundSize: "cover",
-            backgroundPosition: "center",
-          }}
-        />
-      )}
-
       <FluidBackground albumArt={albumArt} />
 
       {/* Main content area with animated transitions */}
@@ -332,12 +321,16 @@ function App() {
             }}
             className="h-full w-full"
           >
-            <LibraryView
-              isPlaying={isPlaying}
-              onPlayPause={handlePlayPause}
-              onTrackSelect={handleTrackSelect}
-              onSelectLibrary={handleSelectLibrary}
-            />
+            {libraryEmpty ? (
+              <WelcomeView onSelectLibrary={handleSelectLibrary} />
+            ) : (
+              <LibraryView
+                isPlaying={isPlaying}
+                onPlayPause={handlePlayPause}
+                onTrackSelect={handleTrackSelect}
+                onSelectLibrary={handleSelectLibrary}
+              />
+            )}
           </motion.div>
         ) : activeView === "eq" ? (
           <motion.div
@@ -478,8 +471,6 @@ function App() {
         isPlaying={isPlaying}
         onPlayPause={handlePlayPause}
         currentTrack={currentTrackForPill}
-        libraryEmpty={libraryEmpty}
-        onSelectLibrary={handleSelectLibrary}
         onScanLibrary={handleSelectLibrary}
       />
 

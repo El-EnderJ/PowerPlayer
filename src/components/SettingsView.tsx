@@ -158,7 +158,7 @@ function EnginePanel() {
             step={1}
             value={bufferMs}
             onChange={handleBufferChange}
-            className="h-1.5 flex-1 cursor-pointer appearance-none rounded-full bg-white/10 accent-cyan-400"
+            className="glass-slider flex-1"
           />
           <span className="w-14 text-right font-mono text-sm text-cyan-300">
             {bufferMs}ms
@@ -226,7 +226,7 @@ function SpatialPanel() {
                 damping: 0.5,
               }).catch(() => {});
             }}
-            className="h-1.5 flex-1 cursor-pointer appearance-none rounded-full bg-white/10 accent-cyan-400"
+            className="glass-slider flex-1"
           />
           <span className="w-14 text-right font-mono text-sm text-cyan-300">
             {roomSize}m
@@ -413,7 +413,7 @@ function SettingsView({ onBack }: SettingsViewProps) {
           initial={{ opacity: 0, x: 12 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.2 }}
-          className="flex-1 rounded-2xl border-t border-white/10 border-b-black/40 bg-white/[0.04] p-5 shadow-[0_20px_50px_rgba(0,0,0,0.5)] backdrop-blur-[28px] saturate-[180%] overflow-y-auto scrollbar-hide"
+          className="liquid-glass flex-1 rounded-2xl p-5 overflow-y-auto scrollbar-hide"
         >
           {activeCategory === "output" && <OutputPanel />}
           {activeCategory === "engine" && <EnginePanel />}
