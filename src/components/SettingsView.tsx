@@ -78,8 +78,8 @@ function OutputPanel() {
 
   const handleDeviceChange = useCallback((id: string) => {
     setSelectedDevice(id);
-    invokeSafe("set_output_device", { id, exclusive: false }).catch(() => {});
-  }, []);
+    invokeSafe("set_output_device", { id, exclusive: exclusiveMode }).catch(() => {});
+  }, [exclusiveMode]);
 
   const handleExclusiveToggle = useCallback(
     (val: boolean) => {
@@ -102,7 +102,7 @@ function OutputPanel() {
         options={
           devices.length
             ? devices
-            : [{ id: selectedDevice || "default", name: stats?.device_name ?? "—" }]
+            : [{ id: selectedDevice || "default", name: stats?.device_name ?? "Dispositivo por defecto" }]
         }
         onChange={handleDeviceChange}
       />
