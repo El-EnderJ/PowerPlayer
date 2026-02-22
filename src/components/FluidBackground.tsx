@@ -67,6 +67,18 @@ function extractColors(src: string): Promise<string[]> {
 export default function FluidBackground({ albumArt }: FluidBackgroundProps) {
   const [colors, setColors] = useState<string[]>(DEFAULT_COLORS);
   const prevArtRef = useRef<string | undefined>(undefined);
+  const [isFocused, setIsFocused] = useState(true);
+
+  useEffect(() => {
+    const onFocus = () => setIsFocused(true);
+    const onBlur = () => setIsFocused(false);
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, []);
 
   useEffect(() => {
     if (albumArt && albumArt !== prevArtRef.current) {
@@ -92,34 +104,46 @@ export default function FluidBackground({ albumArt }: FluidBackgroundProps) {
         >
           {/* Color blob 1 */}
           <motion.div
-            animate={{
-              x: ["0%", "15%", "-10%", "0%"],
-              y: ["0%", "-20%", "10%", "0%"],
-              scale: [1, 1.2, 0.9, 1],
-            }}
-            transition={{ duration: 18, repeat: Infinity, ease: "linear" }}
+            animate={
+              isFocused
+                ? {
+                    x: ["0%", "15%", "-10%", "0%"],
+                    y: ["0%", "-20%", "10%", "0%"],
+                    scale: [1, 1.2, 0.9, 1],
+                  }
+                : { x: "0%", y: "0%", scale: 1 }
+            }
+            transition={{ duration: isFocused ? 18 : 0.5, repeat: isFocused ? Infinity : 0, ease: "linear" }}
             className="absolute left-[10%] top-[15%] h-[60%] w-[60%] rounded-full"
             style={{ background: `radial-gradient(circle, ${colors[0]} 0%, transparent 70%)` }}
           />
           {/* Color blob 2 */}
           <motion.div
-            animate={{
-              x: ["0%", "-20%", "10%", "0%"],
-              y: ["0%", "15%", "-15%", "0%"],
-              scale: [1, 0.95, 1.15, 1],
-            }}
-            transition={{ duration: 22, repeat: Infinity, ease: "linear" }}
+            animate={
+              isFocused
+                ? {
+                    x: ["0%", "-20%", "10%", "0%"],
+                    y: ["0%", "15%", "-15%", "0%"],
+                    scale: [1, 0.95, 1.15, 1],
+                  }
+                : { x: "0%", y: "0%", scale: 1 }
+            }
+            transition={{ duration: isFocused ? 22 : 0.5, repeat: isFocused ? Infinity : 0, ease: "linear" }}
             className="absolute right-[5%] top-[20%] h-[55%] w-[55%] rounded-full"
             style={{ background: `radial-gradient(circle, ${colors[1]} 0%, transparent 70%)` }}
           />
           {/* Color blob 3 */}
           <motion.div
-            animate={{
-              x: ["0%", "12%", "-8%", "0%"],
-              y: ["0%", "-10%", "20%", "0%"],
-              scale: [1, 1.1, 0.95, 1],
-            }}
-            transition={{ duration: 25, repeat: Infinity, ease: "linear" }}
+            animate={
+              isFocused
+                ? {
+                    x: ["0%", "12%", "-8%", "0%"],
+                    y: ["0%", "-10%", "20%", "0%"],
+                    scale: [1, 1.1, 0.95, 1],
+                  }
+                : { x: "0%", y: "0%", scale: 1 }
+            }
+            transition={{ duration: isFocused ? 25 : 0.5, repeat: isFocused ? Infinity : 0, ease: "linear" }}
             className="absolute bottom-[10%] left-[25%] h-[50%] w-[50%] rounded-full"
             style={{ background: `radial-gradient(circle, ${colors[2]} 0%, transparent 70%)` }}
           />

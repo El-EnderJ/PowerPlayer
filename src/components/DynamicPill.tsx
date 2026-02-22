@@ -10,6 +10,8 @@ import {
   SlidersHorizontal as AudioIcon,
   FolderSearch,
   Info,
+  Mic2,
+  ChevronDown,
 } from "lucide-react";
 
 export type PillTab = "library" | "eq" | "search" | "settings";
@@ -25,6 +27,14 @@ interface DynamicPillProps {
   };
   onScanLibrary?: () => void;
   onTrackClick?: () => void;
+  /** When true, the pill becomes ultra-minimalist (full player is open) */
+  fullPlayerOpen?: boolean;
+  /** Remaining time string to show in minimalist mode */
+  remainingTime?: string;
+  /** Callback when user clicks the Lyrics quick-toggle in minimalist mode */
+  onToggleLyrics?: () => void;
+  /** Callback to close the full player from the minimalist pill */
+  onCloseFullPlayer?: () => void;
 }
 
 const TABS: { id: PillTab; icon: typeof LayoutGrid; label: string }[] = [
@@ -42,6 +52,10 @@ function DynamicPill({
   currentTrack,
   onScanLibrary,
   onTrackClick,
+  fullPlayerOpen = false,
+  remainingTime,
+  onToggleLyrics,
+  onCloseFullPlayer,
 }: DynamicPillProps) {
   const hasTrack = !!currentTrack;
   const [hoveredTab, setHoveredTab] = useState<PillTab | null>(null);
@@ -59,6 +73,47 @@ function DynamicPill({
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [dropUpOpen]);
+
+  // ── Ultra-minimalist mode when full player is open ──
+  if (fullPlayerOpen) {
+    return (
+      <motion.div
+        layout
+        className="liquid-glass fixed bottom-8 left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 rounded-full px-5 py-2.5"
+        transition={{ layout: { type: "spring", stiffness: 400, damping: 30 } }}
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+      >
+        {remainingTime && (
+          <span className="font-mono text-xs text-white/60">{remainingTime}</span>
+        )}
+        {onToggleLyrics && (
+          <motion.button
+            type="button"
+            whileHover={{ scale: 1.15 }}
+            whileTap={{ scale: 0.92 }}
+            onClick={onToggleLyrics}
+            className="flex h-8 w-8 items-center justify-center rounded-full bg-white/10 text-white/70 transition-colors hover:text-white"
+            aria-label="Toggle Lyrics"
+          >
+            <Mic2 size={14} />
+          </motion.button>
+        )}
+        {onCloseFullPlayer && (
+          <motion.button
+            type="button"
+            whileHover={{ scale: 1.15 }}
+            whileTap={{ scale: 0.92 }}
+            onClick={onCloseFullPlayer}
+            className="flex h-8 w-8 items-center justify-center rounded-full bg-white/10 text-white/70 transition-colors hover:text-white"
+            aria-label="Close player"
+          >
+            <ChevronDown size={14} />
+          </motion.button>
+        )}
+      </motion.div>
+    );
+  }
 
   return (
     <motion.div
