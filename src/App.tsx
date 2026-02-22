@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { open } from "@tauri-apps/plugin-dialog";
 import FluidBackground from "./components/FluidBackground";
+import FullPlayerView from "./components/FullPlayerView";
 import LyricsView from "./components/LyricsView";
 import PlaybackControls from "./components/PlaybackControls";
 import VisualEQ from "./components/VisualEQ";
@@ -72,6 +73,7 @@ function App() {
   const [fps, setFps] = useState(0);
   const [activeView, setActiveView] = useState<PillTab>("library");
   const [libraryEmpty, setLibraryEmpty] = useState(false);
+  const [showFullPlayer, setShowFullPlayer] = useState(false);
   const pendingVibeRef = useRef(false);
   const skipFrameRef = useRef(false);
   const amplitudeRef = useRef(0);
@@ -473,6 +475,25 @@ function App() {
         )}
       </AnimatePresence>
 
+      {/* Full Player Overlay */}
+      <AnimatePresence>
+        {showFullPlayer && (
+          <FullPlayerView
+            albumArt={albumArt}
+            trackTitle={trackTitle}
+            trackArtist={trackArtist}
+            isPlaying={isPlaying}
+            currentTime={currentTime}
+            duration={duration}
+            onPlayPause={handlePlayPause}
+            onSkipBack={handleSkipBack}
+            onSkipForward={handleSkipForward}
+            onSeek={handleSeek}
+            onClose={() => setShowFullPlayer(false)}
+          />
+        )}
+      </AnimatePresence>
+
       {/* Dynamic Pill Navigation */}
       <DynamicPill
         activeTab={activeView}
@@ -481,6 +502,7 @@ function App() {
         onPlayPause={handlePlayPause}
         currentTrack={currentTrackForPill}
         onScanLibrary={handleSelectLibrary}
+        onTrackClick={() => currentTrackForPill && setShowFullPlayer(true)}
       />
 
       {showFps ? (
