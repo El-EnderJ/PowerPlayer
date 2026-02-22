@@ -1,7 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import FluidBackground from "./components/FluidBackground";
 import LyricsView from "./components/LyricsView";
@@ -13,6 +11,8 @@ import LibraryView from "./components/LibraryView";
 import SearchView from "./components/SearchView";
 import SettingsView from "./components/SettingsView";
 import WelcomeView from "./components/WelcomeView";
+import { useAudioIPC } from "./hooks/useAudioIPC";
+import { useTrackState } from "./hooks/useTrackState";
 
 interface TrackData {
   artist: string;
@@ -44,26 +44,32 @@ const VOLUME_SLIDER_DB_RANGE = 60;
 const VIBE_SKIP_THRESHOLD_MS = 8;
 const VIBE_CHANGE_THRESHOLD = 0.75;
 const MAX_SPECTRUM_SAMPLE_POINTS = 48;
-const invokeSafe = <T,>(command: string, args?: Record<string, unknown>) =>
-  Promise.resolve().then(() => invoke<T>(command, args));
-const listenSafe = <T,>(
-  event: string,
-  handler: (event: { payload: T }) => void
-) => Promise.resolve().then(() => listen<T>(event, handler));
 
 function App() {
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [volume, setVolume] = useState(0.75);
-  const [albumArt, setAlbumArt] = useState<string | undefined>(undefined);
-  const [trackTitle, setTrackTitle] = useState("PowerPlayer");
-  const [trackArtist, setTrackArtist] = useState("Hi-Res Audio Player");
-  const [duration, setDuration] = useState(0);
-  const [currentTime, setCurrentTime] = useState(0);
+  const { invokeSafe, listenSafe } = useAudioIPC();
+  const {
+    isPlaying,
+    setIsPlaying,
+    volume,
+    setVolume,
+    albumArt,
+    setAlbumArt,
+    trackTitle,
+    setTrackTitle,
+    trackArtist,
+    setTrackArtist,
+    duration,
+    setDuration,
+    currentTime,
+    setCurrentTime,
+    lyricsLines,
+    setLyricsLines,
+    activeLyricIndex,
+    setActiveLyricIndex,
+  } = useTrackState();
   const [spectrum, setSpectrum] = useState<number[]>([]);
   const [amplitude, setAmplitude] = useState(0);
   const [fps, setFps] = useState(0);
-  const [lyricsLines, setLyricsLines] = useState<LyricsLine[]>([]);
-  const [activeLyricIndex, setActiveLyricIndex] = useState(0);
   const [activeView, setActiveView] = useState<PillTab>("library");
   const [libraryEmpty, setLibraryEmpty] = useState(false);
   const pendingVibeRef = useRef(false);
@@ -71,26 +77,53 @@ function App() {
   const amplitudeRef = useRef(0);
   const spectrumRef = useRef<number[]>([]);
   const activeArtUrlRef = useRef<string | null>(null);
-  const lyricsUnlistenRef = useRef<(() => void) | null>(null);
+
+  const updateAlbumArt = useCallback(
+    (coverArt?: TrackData["cover_art"]) => {
+      if (activeArtUrlRef.current) {
+        URL.revokeObjectURL(activeArtUrlRef.current);
+        activeArtUrlRef.current = null;
+      }
+      if (coverArt) {
+        const blob = new Blob([new Uint8Array(coverArt.data)], {
+          type: coverArt.media_type || "image/jpeg",
+        });
+        const artUrl = URL.createObjectURL(blob);
+        activeArtUrlRef.current = artUrl;
+        setAlbumArt(artUrl);
+      } else {
+        setAlbumArt(undefined);
+      }
+    },
+    [setAlbumArt]
+  );
 
   const handlePlay = useCallback(() => {
     setIsPlaying(true);
-    void invokeSafe("play").catch(() => {});
-  }, []);
+    void invokeSafe("play").catch((error) => {
+      console.error("Failed to play track", error);
+    });
+  }, [invokeSafe, setIsPlaying]);
   const handlePause = useCallback(() => {
     setIsPlaying(false);
-    void invokeSafe("pause").catch(() => {});
-  }, []);
+    void invokeSafe("pause").catch((error) => {
+      console.error("Failed to pause track", error);
+    });
+  }, [invokeSafe, setIsPlaying]);
   const handleSkipForward = useCallback(() => {
     const next = Math.min(duration, currentTime + 10);
     setCurrentTime(next);
-    void invokeSafe("seek", { seconds: next }).catch(() => {});
-  }, [currentTime, duration]);
+    void invokeSafe("seek", { seconds: next }).catch((error) => {
+      console.error("Failed to seek forward", error);
+    });
+  }, [currentTime, duration, invokeSafe]);
   const handleSkipBack = useCallback(() => {
     const prev = Math.max(0, currentTime - 10);
     setCurrentTime(prev);
-    void invokeSafe("seek", { seconds: prev }).catch(() => {});
-  }, [currentTime]);
+    void invokeSafe("seek", { seconds: prev }).catch((error) => {
+      console.error("Failed to seek backward", error);
+    });
+  }, [currentTime, invokeSafe]);
 
   const handleOpenTrack = useCallback(async () => {
     try {
@@ -100,38 +133,26 @@ function App() {
       });
       if (!selected || Array.isArray(selected)) return;
 
-      const track = await invoke<TrackData>("load_track", { path: selected });
-      const parsedLyrics = await invoke<LyricsLine[]>("get_lyrics_lines");
+      const track = await invokeSafe<TrackData>("load_track", { path: selected });
+      const parsedLyrics = await invokeSafe<LyricsLine[]>("get_lyrics_lines");
       setTrackTitle(track.title || "Unknown Title");
       setTrackArtist(track.artist || "Unknown Artist");
       setDuration(track.duration_seconds || 0);
       setCurrentTime(0);
       setLyricsLines(parsedLyrics);
       setActiveLyricIndex(0);
-      if (track.cover_art) {
-        if (activeArtUrlRef.current) {
-          URL.revokeObjectURL(activeArtUrlRef.current);
-        }
-        const blob = new Blob([new Uint8Array(track.cover_art.data)], {
-          type: track.cover_art.media_type || "image/jpeg",
-        });
-        const artUrl = URL.createObjectURL(blob);
-        activeArtUrlRef.current = artUrl;
-        setAlbumArt(artUrl);
-      } else {
-        setAlbumArt(undefined);
-      }
+      updateAlbumArt(track.cover_art);
     } catch (error) {
-      if (import.meta.env.DEV) {
-        console.error("track load failed", error);
-      }
+      console.error("Track load failed while opening file picker selection", error);
     }
-  }, []);
+  }, [invokeSafe, updateAlbumArt]);
 
   const handleSeek = useCallback((seconds: number) => {
     setCurrentTime(seconds);
-    void invokeSafe("seek", { seconds }).catch(() => {});
-  }, []);
+    void invokeSafe("seek", { seconds }).catch((error) => {
+      console.error("Failed to seek to selected time", error);
+    });
+  }, [invokeSafe]);
 
   const handleVolume = useCallback((sliderVolume: number) => {
     setVolume(sliderVolume);
@@ -142,8 +163,10 @@ function App() {
             10,
             (sliderVolume * VOLUME_SLIDER_DB_RANGE - VOLUME_SLIDER_DB_RANGE) / 20
           );
-    void invokeSafe("set_volume", { volume: linearVolume }).catch(() => {});
-  }, []);
+    void invokeSafe("set_volume", { volume: linearVolume }).catch((error) => {
+      console.error("Failed to update playback volume", error);
+    });
+  }, [invokeSafe]);
 
   const handlePlayPause = useCallback(() => {
     if (isPlaying) {
@@ -156,58 +179,45 @@ function App() {
   const handleTrackSelect = useCallback(
     async (path: string) => {
       try {
-        const track = await invoke<TrackData>("load_track", { path });
-        const parsedLyrics = await invoke<LyricsLine[]>("get_lyrics_lines");
+        const track = await invokeSafe<TrackData>("load_track", { path });
+        const parsedLyrics = await invokeSafe<LyricsLine[]>("get_lyrics_lines");
         setTrackTitle(track.title || "Unknown Title");
         setTrackArtist(track.artist || "Unknown Artist");
         setDuration(track.duration_seconds || 0);
         setCurrentTime(0);
         setLyricsLines(parsedLyrics);
         setActiveLyricIndex(0);
-        if (track.cover_art) {
-          if (activeArtUrlRef.current) {
-            URL.revokeObjectURL(activeArtUrlRef.current);
-          }
-          const blob = new Blob([new Uint8Array(track.cover_art.data)], {
-            type: track.cover_art.media_type || "image/jpeg",
-          });
-          const artUrl = URL.createObjectURL(blob);
-          activeArtUrlRef.current = artUrl;
-          setAlbumArt(artUrl);
-        } else {
-          setAlbumArt(undefined);
-        }
+        updateAlbumArt(track.cover_art);
         handlePlay();
       } catch (error) {
-        if (import.meta.env.DEV) {
-          console.error("track select failed", error);
-        }
+        console.error(`Track selection failed for path "${path}"`, error);
       }
     },
-    [handlePlay]
+    [handlePlay, invokeSafe, updateAlbumArt]
   );
 
   // Check if library is empty on mount
   useEffect(() => {
     invokeSafe<{ path: string }[]>("get_library_tracks")
       .then((tracks) => setLibraryEmpty(!tracks || tracks.length === 0))
-      .catch(() => setLibraryEmpty(true));
-  }, []);
+      .catch((error) => {
+        console.error("Failed to read library tracks on app mount", error);
+        setLibraryEmpty(true);
+      });
+  }, [invokeSafe]);
 
   // Select folder and scan library (Tauri integration)
   const handleSelectLibrary = useCallback(async () => {
     try {
       const selected = await open({ directory: true, multiple: false });
       if (!selected || Array.isArray(selected)) return;
-      await invoke("scan_library", { path: selected });
+      await invokeSafe("scan_library", { path: selected });
       setLibraryEmpty(false);
       setActiveView("library");
     } catch (error) {
-      if (import.meta.env.DEV) {
-        console.error("library scan failed", error);
-      }
+      console.error("Library scan failed for selected folder", error);
     }
-  }, []);
+  }, [invokeSafe]);
 
   const currentTrackForPill =
     trackTitle !== "PowerPlayer"
@@ -254,7 +264,9 @@ function App() {
             setAmplitude(vibe.amplitude);
           }
         })
-        .catch(() => {})
+        .catch((error) => {
+          console.error("Failed to read vibe data from backend", error);
+        })
         .finally(() => {
           if (performance.now() - start > VIBE_SKIP_THRESHOLD_MS) {
             skipFrameRef.current = true;
@@ -271,35 +283,32 @@ function App() {
     () => () => {
       if (activeArtUrlRef.current) {
         URL.revokeObjectURL(activeArtUrlRef.current);
+        activeArtUrlRef.current = null;
       }
     },
     []
   );
 
   useEffect(() => {
-    let disposed = false;
-    listenSafe<LyricsEventPayload>("lyrics-line-changed", (event) => {
-      const index = event.payload.index;
-      if (typeof index === "number" && index >= 0) {
-        setActiveLyricIndex(index);
-      } else {
-        setActiveLyricIndex(0);
+    let unlisten: (() => void) | null = null;
+    void (async () => {
+      try {
+        unlisten = await listenSafe<LyricsEventPayload>("lyrics-line-changed", (event) => {
+          const index = event.payload.index;
+          if (typeof index === "number" && index >= 0) {
+            setActiveLyricIndex(index);
+          } else {
+            setActiveLyricIndex(0);
+          }
+        });
+      } catch (error) {
+        console.error("Failed to register lyrics-line-changed listener", error);
       }
-    })
-      .then((cleanup) => {
-        lyricsUnlistenRef.current = cleanup;
-        if (disposed) {
-          cleanup();
-          lyricsUnlistenRef.current = null;
-        }
-      })
-      .catch(() => {});
+    })();
     return () => {
-      disposed = true;
-      lyricsUnlistenRef.current?.();
-      lyricsUnlistenRef.current = null;
+      unlisten?.();
     };
-  }, []);
+  }, [listenSafe, setActiveLyricIndex]);
 
   const showFps = import.meta.env.DEV;
 
