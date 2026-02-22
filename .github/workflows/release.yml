@@ -1,0 +1,42 @@
+name: "Release PowerPlayer"
+
+on:
+  push:
+    tags:
+      - 'v*' # Se activa cuando subes un tag como v1.0.0
+
+jobs:
+  publish:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [windows-latest] # Puedes añadir macos-latest más adelante
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: 'npm'
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: Build and Publish
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: app-v__VERSION__ # El tag se tomará del package.json o del push
+          releaseName: "PowerPlayer v__VERSION__"
+          releaseBody: "🚀 Descubre la nueva versión de PowerPlayer con Liquid Glass UI y motor Bit-Perfect."
+          releaseDraft: true # Lo crea como borrador para que lo revises antes de publicar
+          prerelease: false
