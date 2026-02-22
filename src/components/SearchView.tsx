@@ -50,11 +50,12 @@ function HighlightedText({
   const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const regex = new RegExp(`(${escaped})`, "gi");
   const parts = text.split(regex);
+  const lowerQuery = query.toLowerCase();
 
   return (
     <span className={className}>
       {parts.map((part, i) =>
-        regex.test(part) ? (
+        part.toLowerCase() === lowerQuery ? (
           <span key={i} className="text-cyan-300">
             {part}
           </span>
@@ -323,7 +324,7 @@ function SearchView({
                   className="flex items-center gap-2 rounded-2xl border border-cyan-500/30 bg-cyan-500/10 px-8 py-4 text-base font-medium text-cyan-300 transition-colors hover:bg-cyan-500/20"
                 >
                   <FolderOpen size={22} />
-                  📂 Seleccionar Carpeta de Música
+                  Seleccionar Carpeta de Música
                 </button>
               )}
             </div>
@@ -345,7 +346,7 @@ function SearchView({
                   className="mt-4 flex items-center gap-2 rounded-2xl border border-cyan-500/30 bg-cyan-500/10 px-6 py-3 text-sm font-medium text-cyan-300 transition-colors hover:bg-cyan-500/20"
                 >
                   <FolderOpen size={18} />
-                  📂 Seleccionar Carpeta de Música
+                  Seleccionar Carpeta de Música
                 </button>
               )}
             </div>

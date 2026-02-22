@@ -36,11 +36,12 @@ function Highlighted({ text, query }: { text: string; query?: string }) {
   const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const regex = new RegExp(`(${escaped})`, "gi");
   const parts = text.split(regex);
+  const lowerQuery = query.toLowerCase();
 
   return (
     <>
       {parts.map((part, i) =>
-        regex.test(part) ? (
+        part.toLowerCase() === lowerQuery ? (
           <span key={i} className="text-cyan-300">
             {part}
           </span>
