@@ -82,6 +82,10 @@ function DynamicPill({
               layoutId="track-art"
               className="h-8 w-8 flex-shrink-0 cursor-pointer overflow-hidden rounded-lg bg-white/10 md:h-10 md:w-10"
               onClick={onTrackClick}
+              onKeyDown={(e) => e.key === "Enter" && onTrackClick?.()}
+              role="button"
+              tabIndex={0}
+              aria-label="Open full player"
             >
               {currentTrack.artUrl ? (
                 <img
@@ -107,6 +111,9 @@ function DynamicPill({
               className="max-w-[120px] cursor-pointer truncate text-xs font-medium text-white md:max-w-[160px] md:text-sm"
               title={currentTrack.title}
               onClick={onTrackClick}
+              onKeyDown={(e) => e.key === "Enter" && onTrackClick?.()}
+              role="button"
+              tabIndex={0}
             >
               {currentTrack.title}
             </motion.span>

@@ -67,11 +67,17 @@ function FullPlayerView({
   const [localProgress, setLocalProgress] = useState<number | null>(null);
   const seekDebounceRef = useRef<number | null>(null);
   const waveContainerRef = useRef<HTMLDivElement>(null);
+  const dragListenersRef = useRef<{ move: (e: MouseEvent) => void; up: (e: MouseEvent) => void } | null>(null);
 
   useEffect(
     () => () => {
       if (seekDebounceRef.current !== null) {
         window.clearTimeout(seekDebounceRef.current);
+      }
+      if (dragListenersRef.current) {
+        document.removeEventListener("mousemove", dragListenersRef.current.move);
+        document.removeEventListener("mouseup", dragListenersRef.current.up);
+        dragListenersRef.current = null;
       }
     },
     []
@@ -107,6 +113,7 @@ function FullPlayerView({
       const onUp = (me: MouseEvent) => {
         document.removeEventListener("mousemove", onMove);
         document.removeEventListener("mouseup", onUp);
+        dragListenersRef.current = null;
         if (!waveContainerRef.current) return;
         const rect = waveContainerRef.current.getBoundingClientRect();
         const x = Math.max(0, Math.min(1, (me.clientX - rect.left) / rect.width));
@@ -117,10 +124,30 @@ function FullPlayerView({
         onSeek(x * duration);
         setLocalProgress(null);
       };
+      // Clean up any previous listeners before adding new ones
+      if (dragListenersRef.current) {
+        document.removeEventListener("mousemove", dragListenersRef.current.move);
+        document.removeEventListener("mouseup", dragListenersRef.current.up);
+      }
+      dragListenersRef.current = { move: onMove, up: onUp };
       document.addEventListener("mousemove", onMove);
       document.addEventListener("mouseup", onUp);
     },
     [duration, onSeek, handleWaveSeek]
+  );
+
+  const handleWaveKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      const step = duration * 0.02;
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        onSeek(Math.min(duration, currentTime + step));
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        onSeek(Math.max(0, currentTime - step));
+      }
+    },
+    [currentTime, duration, onSeek]
   );
 
   return (
@@ -222,6 +249,7 @@ function FullPlayerView({
               ref={waveContainerRef}
               className="flex h-12 flex-1 cursor-pointer items-end gap-[2px] rounded-xl"
               onMouseDown={handleWaveMouseDown}
+              onKeyDown={handleWaveKeyDown}
               role="slider"
               aria-label="Seek"
               aria-valuemin={0}
