@@ -1,5 +1,6 @@
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
+use rusqlite::OptionalExtension;
 use rusqlite::params;
 use std::path::Path;
 
@@ -110,6 +111,37 @@ impl DbManager {
             .map_err(|e| format!("Failed to read tracks: {e}"))
     }
 
+    pub fn get_waveform_data(&self, path: &str) -> Result<Option<Vec<f32>>, String> {
+        let conn = self.connection()?;
+        let waveform_json: Option<String> = conn
+            .query_row(
+                "SELECT waveform_data FROM tracks WHERE path = ?1",
+                params![path],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("Failed to query waveform for {path}: {e}"))?;
+
+        match waveform_json {
+            Some(json) => serde_json::from_str(&json)
+                .map(Some)
+                .map_err(|e| format!("Failed to parse waveform cache for {path}: {e}")),
+            None => Ok(None),
+        }
+    }
+
+    pub fn save_waveform_data(&self, path: &str, waveform: &[f32]) -> Result<(), String> {
+        let conn = self.connection()?;
+        let waveform_json = serde_json::to_string(waveform)
+            .map_err(|e| format!("Failed to serialize waveform cache for {path}: {e}"))?;
+        conn.execute(
+            "UPDATE tracks SET waveform_data = ?1, updated_at = CURRENT_TIMESTAMP WHERE path = ?2",
+            params![waveform_json, path],
+        )
+        .map_err(|e| format!("Failed to store waveform cache for {path}: {e}"))?;
+        Ok(())
+    }
+
     fn initialize_schema(&self) -> Result<(), String> {
         let conn = self.connection()?;
         conn.execute_batch(
@@ -141,6 +173,7 @@ impl DbManager {
         .map_err(|e| format!("Failed to initialize DB schema: {e}"))?;
         self.ensure_track_column("art_url", "TEXT")?;
         self.ensure_track_column("corrupted", "INTEGER NOT NULL DEFAULT 0")?;
+        self.ensure_track_column("waveform_data", "TEXT")?;
         Ok(())
     }
 
@@ -242,5 +275,31 @@ mod tests {
 
         let rows = db.get_tracks().expect("tracks should load");
         assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn waveform_cache_roundtrip() {
+        let path = unique_db_path();
+        let db = DbManager::new(&path).expect("db should initialize");
+        let track = TrackInput {
+            path: "/music/cache.flac".to_string(),
+            title: None,
+            artist: None,
+            album: None,
+            duration_seconds: None,
+            sample_rate: None,
+            art_url: None,
+            corrupted: false,
+        };
+        db.save_track(&track).expect("save should work");
+
+        let waveform = vec![0.1_f32, 0.5, 1.0];
+        db.save_waveform_data(&track.path, &waveform)
+            .expect("waveform save should work");
+        let loaded = db
+            .get_waveform_data(&track.path)
+            .expect("waveform load should work")
+            .expect("waveform should exist");
+        assert_eq!(loaded, waveform);
     }
 }
