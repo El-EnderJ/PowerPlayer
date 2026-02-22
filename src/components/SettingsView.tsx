@@ -49,8 +49,14 @@ interface LibraryStats {
   cache_size_mb: number;
 }
 
-const invokeSafe = <T,>(command: string, args?: Record<string, unknown>) =>
-  Promise.resolve().then(() => invoke<T>(command, args));
+const invokeSafe = async <T,>(command: string, args?: Record<string, unknown>) => {
+  try {
+    return await invoke<T>(command, args);
+  } catch (error) {
+    console.error(`Settings IPC failed for command "${command}"`, error);
+    throw error;
+  }
+};
 
 /* ------------------------------------------------------------------ */
 /*  Output Panel                                                       */
@@ -67,18 +73,23 @@ function OutputPanel() {
         setStats(s);
         setSelectedDevice(s.device_name);
       })
-      .catch(() => {});
+      .catch((error) => {
+        console.error("Failed to load audio stats in settings output panel", error);
+      });
 
     invokeSafe<AudioDevice[]>("get_audio_devices")
       .then((d) => setDevices(d))
-      .catch(() =>
-        setDevices([{ id: "default", name: "Dispositivo por defecto" }])
-      );
+      .catch((error) => {
+        console.error("Failed to load audio device list in settings output panel", error);
+        setDevices([{ id: "default", name: "Dispositivo por defecto" }]);
+      });
   }, []);
 
   const handleDeviceChange = useCallback((id: string) => {
     setSelectedDevice(id);
-    invokeSafe("set_output_device", { id, exclusive: exclusiveMode }).catch(() => {});
+    invokeSafe("set_output_device", { id, exclusive: exclusiveMode }).catch((error) => {
+      console.error("Failed to change output device", error);
+    });
   }, [exclusiveMode]);
 
   const handleExclusiveToggle = useCallback(
@@ -87,7 +98,9 @@ function OutputPanel() {
       invokeSafe("set_output_device", {
         id: selectedDevice,
         exclusive: val,
-      }).catch(() => {});
+      }).catch((error) => {
+        console.error("Failed to toggle exclusive output mode", error);
+      });
     },
     [selectedDevice]
   );
@@ -139,7 +152,9 @@ function EnginePanel() {
   const handleBufferChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const val = Number(e.target.value);
     setBufferMs(val);
-    invokeSafe("set_buffer_size", { ms: val }).catch(() => {});
+    invokeSafe("set_buffer_size", { ms: val }).catch((error) => {
+      console.error("Failed to update DSP buffer size", error);
+    });
   }, []);
 
   return (
@@ -173,7 +188,9 @@ function EnginePanel() {
         enabled={hqResampler}
         onChange={(val) => {
           setHqResampler(val);
-          invokeSafe("toggle_hq_resampler", { enabled: val }).catch(() => {});
+          invokeSafe("toggle_hq_resampler", { enabled: val }).catch((error) => {
+            console.error("Failed to toggle HQ resampler", error);
+          });
         }}
         label="Resampler de Alta Calidad"
         description="Usa algoritmos sinc de alta precisión para conversión de frecuencia de muestreo."
@@ -199,7 +216,9 @@ function SpatialPanel() {
           setGpuEnabled(val);
           invokeSafe("set_ai_provider", {
             provider: val ? "gpu" : "cpu",
-          }).catch(() => {});
+          }).catch((error) => {
+            console.error("Failed to update AI provider", error);
+          });
         }}
         label="Cargar Modelo ONNX en GPU"
         description="Acelera la separación de pistas usando la GPU. Requiere CUDA o DirectML."
@@ -224,7 +243,9 @@ function SpatialPanel() {
                 length: val,
                 height: val * 0.5,
                 damping: 0.5,
-              }).catch(() => {});
+              }).catch((error) => {
+                console.error("Failed to update spatial room properties", error);
+              });
             }}
             className="glass-slider flex-1"
           />
@@ -256,7 +277,9 @@ function LibraryPanel() {
       .then((tracks) =>
         setStats((prev) => ({ ...prev, total_tracks: tracks?.length ?? 0 }))
       )
-      .catch(() => {});
+      .catch((error) => {
+        console.error("Failed to fetch library stats in settings", error);
+      });
   }, []);
 
   const handleAddFolder = useCallback(async () => {
@@ -271,8 +294,8 @@ function LibraryPanel() {
         total_tracks: tracks?.length ?? 0,
         scan_paths: [...prev.scan_paths, selected],
       }));
-    } catch {
-      /* ignore */
+    } catch (error) {
+      console.error("Failed to add folder and rescan library from settings", error);
     } finally {
       setScanning(false);
     }
@@ -282,8 +305,8 @@ function LibraryPanel() {
     setScanning(true);
     try {
       await invokeSafe("rebuild_fts_index");
-    } catch {
-      /* ignore */
+    } catch (error) {
+      console.error("Failed to rebuild FTS index from settings", error);
     } finally {
       setScanning(false);
     }
@@ -341,7 +364,9 @@ function LibraryPanel() {
       <button
         type="button"
         onClick={() => {
-          invokeSafe("clear_art_cache").catch(() => {});
+          invokeSafe("clear_art_cache").catch((error) => {
+            console.error("Failed to clear artwork cache", error);
+          });
           setStats((prev) => ({ ...prev, cache_size_mb: 0 }));
         }}
         className="flex items-center gap-2 rounded-lg border border-red-500/20 bg-red-500/10 px-4 py-2 text-sm text-red-300 transition-colors hover:bg-red-500/20"

@@ -58,7 +58,8 @@ export default function VisualEQ({ spectrum = [] }: VisualEQProps) {
     try {
       const data = await invoke<EqBand[]>("get_eq_bands");
       setBands(data);
-    } catch {
+    } catch (error) {
+      console.error("Failed to fetch EQ bands from backend, using defaults", error);
       // Generate default 10-band EQ data for standalone preview
       const defaultBands: EqBand[] = Array.from({ length: 10 }, (_, i) => ({
         index: i,
@@ -76,7 +77,8 @@ export default function VisualEQ({ spectrum = [] }: VisualEQProps) {
         numPoints: RESPONSE_POINTS,
       });
       setResponse(data);
-    } catch {
+    } catch (error) {
+      console.error("Failed to fetch EQ response from backend, using flat response", error);
       // Generate flat response for standalone preview
       const flat: FrequencyPoint[] = Array.from({ length: RESPONSE_POINTS }, (_, i) => ({
         frequency: MIN_FREQ * Math.pow(MAX_FREQ / MIN_FREQ, i / (RESPONSE_POINTS - 1)),
@@ -113,7 +115,8 @@ export default function VisualEQ({ spectrum = [] }: VisualEQProps) {
           q: clampedQ,
         });
         fetchResponse();
-      } catch {
+      } catch (error) {
+        console.error("Failed to update EQ band, refreshing response with fallback", error);
         // Compute local response when backend is unavailable
         fetchResponse();
       }
