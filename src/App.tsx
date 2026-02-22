@@ -11,6 +11,7 @@ import EqualizerView from "./components/EqualizerView";
 import DynamicPill, { type PillTab } from "./components/DynamicPill";
 import LibraryView from "./components/LibraryView";
 import SearchView from "./components/SearchView";
+import SettingsView from "./components/SettingsView";
 
 interface TrackData {
   artist: string;
@@ -370,6 +371,20 @@ function App() {
               libraryEmpty={libraryEmpty}
             />
           </motion.div>
+        ) : activeView === "settings" ? (
+          <motion.div
+            key="settings"
+            initial={{ opacity: 0, x: 50 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -50 }}
+            transition={{
+              enter: { type: "spring", stiffness: 300, damping: 25 },
+              exit: { duration: 0.25 },
+            }}
+            className="h-full w-full"
+          >
+            <SettingsView onBack={() => setActiveView("library")} />
+          </motion.div>
         ) : (
           <motion.div
             key="player"
@@ -465,6 +480,7 @@ function App() {
         currentTrack={currentTrackForPill}
         libraryEmpty={libraryEmpty}
         onSelectLibrary={handleSelectLibrary}
+        onScanLibrary={handleSelectLibrary}
       />
 
       {showFps ? (

@@ -1,4 +1,4 @@
-import { memo, useState } from "react";
+import { memo, useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   LayoutGrid,
@@ -8,6 +8,9 @@ import {
   Play,
   Pause,
   FolderOpen,
+  SlidersHorizontal as AudioIcon,
+  FolderSearch,
+  Info,
 } from "lucide-react";
 
 export type PillTab = "library" | "eq" | "search" | "settings";
@@ -23,6 +26,7 @@ interface DynamicPillProps {
   };
   libraryEmpty?: boolean;
   onSelectLibrary?: () => void;
+  onScanLibrary?: () => void;
 }
 
 const TABS: { id: PillTab; icon: typeof LayoutGrid; label: string }[] = [
@@ -40,9 +44,24 @@ function DynamicPill({
   currentTrack,
   libraryEmpty = false,
   onSelectLibrary,
+  onScanLibrary,
 }: DynamicPillProps) {
   const hasTrack = !!currentTrack;
   const [hoveredTab, setHoveredTab] = useState<PillTab | null>(null);
+  const [dropUpOpen, setDropUpOpen] = useState(false);
+  const dropUpRef = useRef<HTMLDivElement>(null);
+
+  // Close drop-up on outside click
+  useEffect(() => {
+    if (!dropUpOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (dropUpRef.current && !dropUpRef.current.contains(e.target as Node)) {
+        setDropUpOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [dropUpOpen]);
 
   return (
     <motion.div
@@ -129,35 +148,91 @@ function DynamicPill({
         const Icon = tab.icon;
         const isActive = activeTab === tab.id;
         const isHovered = hoveredTab === tab.id;
+        const isSettings = tab.id === "settings";
         return (
-          <motion.button
-            key={tab.id}
-            type="button"
-            onClick={() => onTabChange(tab.id)}
-            onMouseEnter={() => setHoveredTab(tab.id)}
-            onMouseLeave={() => setHoveredTab(null)}
-            className={`relative flex h-9 w-9 items-center justify-center rounded-full transition-colors md:h-12 md:w-12 ${
-              isActive
-                ? "bg-white/15 text-white"
-                : "text-gray-400 hover:text-white"
-            }`}
-            aria-label={tab.label}
-            whileHover={{ scale: 1.15 }}
-            whileTap={{ scale: 0.95 }}
-          >
-            <Icon size={18} className="md:h-5 md:w-5" />
-            {/* Hover glow */}
-            {isHovered && (
-              <motion.div
-                layoutId="pill-glow"
-                className="pointer-events-none absolute inset-0 rounded-full bg-white/10 shadow-[0_0_12px_rgba(34,211,238,0.3)]"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.2 }}
-              />
+          <div key={tab.id} className="relative" ref={isSettings ? dropUpRef : undefined}>
+            <motion.button
+              type="button"
+              onClick={() => {
+                if (isSettings) {
+                  setDropUpOpen((p) => !p);
+                } else {
+                  onTabChange(tab.id);
+                  setDropUpOpen(false);
+                }
+              }}
+              onMouseEnter={() => setHoveredTab(tab.id)}
+              onMouseLeave={() => setHoveredTab(null)}
+              className={`relative flex h-9 w-9 items-center justify-center rounded-full transition-colors md:h-12 md:w-12 ${
+                isActive || (isSettings && dropUpOpen)
+                  ? "bg-white/15 text-white"
+                  : "text-gray-400 hover:text-white"
+              }`}
+              aria-label={tab.label}
+              whileHover={{ scale: 1.15 }}
+              whileTap={{ scale: 0.95 }}
+            >
+              <Icon size={18} className="md:h-5 md:w-5" />
+              {/* Hover glow */}
+              {isHovered && (
+                <motion.div
+                  layoutId="pill-glow"
+                  className="pointer-events-none absolute inset-0 rounded-full bg-white/10 shadow-[0_0_12px_rgba(34,211,238,0.3)]"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                />
+              )}
+            </motion.button>
+
+            {/* Settings Drop-Up Menu */}
+            {isSettings && (
+              <AnimatePresence>
+                {dropUpOpen && (
+                  <motion.div
+                    initial={{ opacity: 0, scaleY: 0 }}
+                    animate={{ opacity: 1, scaleY: 1 }}
+                    exit={{ opacity: 0, scaleY: 0 }}
+                    transition={{ type: "spring", stiffness: 400, damping: 25 }}
+                    style={{ originY: 1, transformOrigin: "bottom" }}
+                    className="liquid-glass absolute bottom-[120%] left-1/2 -translate-x-1/2 w-48 rounded-xl overflow-hidden"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onTabChange("settings");
+                        setDropUpOpen(false);
+                      }}
+                      className="flex w-full items-center gap-2.5 px-3 py-2.5 text-sm text-white/80 transition-colors hover:bg-white/10"
+                    >
+                      <AudioIcon size={15} className="text-cyan-400" />
+                      Ajustes de Audio
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDropUpOpen(false);
+                        onScanLibrary?.();
+                      }}
+                      className="flex w-full items-center gap-2.5 px-3 py-2.5 text-sm text-white/80 transition-colors hover:bg-white/10"
+                    >
+                      <FolderSearch size={15} className="text-emerald-400" />
+                      Escanear Biblioteca
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDropUpOpen(false)}
+                      className="flex w-full items-center gap-2.5 px-3 py-2.5 text-sm text-white/80 transition-colors hover:bg-white/10"
+                    >
+                      <Info size={15} className="text-white/50" />
+                      Acerca de
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             )}
-          </motion.button>
+          </div>
         );
       })}
     </motion.div>
