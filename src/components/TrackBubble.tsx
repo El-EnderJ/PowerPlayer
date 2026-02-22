@@ -8,6 +8,7 @@ export interface TrackBubbleProps {
   sampleRate?: number;
   artUrl?: string;
   path: string;
+  highlightQuery?: string;
   onClick?: () => void;
 }
 
@@ -27,6 +28,30 @@ function formatSampleRate(rate?: number): string {
   return rate >= 1000 ? `${(rate / 1000).toFixed(1)}kHz` : `${rate}Hz`;
 }
 
+/* ── Highlight helper ───────────────────────────────────────────────── */
+
+function Highlighted({ text, query }: { text: string; query?: string }) {
+  if (!query?.trim()) return <>{text}</>;
+
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const regex = new RegExp(`(${escaped})`, "gi");
+  const parts = text.split(regex);
+
+  return (
+    <>
+      {parts.map((part, i) =>
+        regex.test(part) ? (
+          <span key={i} className="text-cyan-300">
+            {part}
+          </span>
+        ) : (
+          <span key={i}>{part}</span>
+        )
+      )}
+    </>
+  );
+}
+
 function TrackBubble({
   title,
   artist,
@@ -35,11 +60,13 @@ function TrackBubble({
   sampleRate,
   artUrl,
   path,
+  highlightQuery,
   onClick,
 }: TrackBubbleProps) {
   const format = formatFromPath(path);
   const sr = formatSampleRate(sampleRate);
   const dur = formatDuration(durationSeconds);
+  const techParts = [sr, format].filter(Boolean).join(" • ");
 
   return (
     <button
@@ -71,15 +98,20 @@ function TrackBubble({
 
       {/* Track info */}
       <div className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate text-lg font-bold text-white">{title}</span>
+        <span className="truncate text-lg font-bold text-white">
+          <Highlighted text={title} query={highlightQuery} />
+        </span>
         <span className="truncate text-sm text-gray-400">
-          {artist} – {album}
+          <Highlighted text={`${artist} – ${album}`} query={highlightQuery} />
         </span>
-        <span className="truncate text-[11px] font-mono text-emerald-400/80">
-          {dur}
-          {format ? ` • ${format}` : ""}
-          {sr ? ` • ${sr}` : ""}
-        </span>
+        <div className="mt-1 flex items-center gap-2">
+          <span className="text-[11px] text-white/40">{dur}</span>
+          {techParts && (
+            <span className="rounded-md bg-white/5 px-1.5 py-0.5 text-[10px] font-mono text-emerald-400/80">
+              {techParts}
+            </span>
+          )}
+        </div>
       </div>
     </button>
   );

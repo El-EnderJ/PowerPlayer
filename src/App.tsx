@@ -10,6 +10,7 @@ import VisualEQ from "./components/VisualEQ";
 import EqualizerView from "./components/EqualizerView";
 import DynamicPill, { type PillTab } from "./components/DynamicPill";
 import LibraryView from "./components/LibraryView";
+import SearchView from "./components/SearchView";
 
 interface TrackData {
   artist: string;
@@ -350,6 +351,24 @@ function App() {
             className="h-full w-full"
           >
             <EqualizerView spectrum={spectrum} />
+          </motion.div>
+        ) : activeView === "search" ? (
+          <motion.div
+            key="search"
+            initial={{ opacity: 0, y: 40, filter: "blur(0px)" }}
+            animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+            exit={{ opacity: 0, filter: "blur(8px)" }}
+            transition={{
+              enter: { type: "spring", stiffness: 300, damping: 25 },
+              exit: { duration: 0.25 },
+            }}
+            className="h-full w-full"
+          >
+            <SearchView
+              onTrackSelect={handleTrackSelect}
+              onSelectLibrary={handleSelectLibrary}
+              libraryEmpty={libraryEmpty}
+            />
           </motion.div>
         ) : (
           <motion.div

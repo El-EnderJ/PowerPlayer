@@ -10,6 +10,9 @@ pub struct SearchResultTrack {
     pub title: Option<String>,
     pub artist: Option<String>,
     pub album: Option<String>,
+    pub duration_seconds: Option<f32>,
+    pub sample_rate: Option<u32>,
+    pub art_url: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -84,7 +87,8 @@ impl DbManager {
         // Matching tracks
         let mut stmt = conn
             .prepare(
-                "SELECT t.id, t.path, t.title, t.artist, t.album
+                "SELECT t.id, t.path, t.title, t.artist, t.album,
+                        t.duration_seconds, t.sample_rate, t.art_url
                  FROM tracks_fts f
                  JOIN tracks t ON t.id = f.rowid
                  WHERE tracks_fts MATCH ?1
@@ -101,6 +105,9 @@ impl DbManager {
                     title: row.get(2)?,
                     artist: row.get(3)?,
                     album: row.get(4)?,
+                    duration_seconds: row.get(5)?,
+                    sample_rate: row.get(6)?,
+                    art_url: row.get(7)?,
                 })
             })
             .map_err(|e| format!("FTS track query failed: {e}"))?
