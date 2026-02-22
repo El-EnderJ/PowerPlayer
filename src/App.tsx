@@ -46,6 +46,7 @@ const VOLUME_SLIDER_DB_RANGE = 60;
 const VIBE_SKIP_THRESHOLD_MS = 8;
 const VIBE_CHANGE_THRESHOLD = 0.75;
 const MAX_SPECTRUM_SAMPLE_POINTS = 48;
+const SPLASH_DURATION_MS = 1200;
 
 function formatTimeApp(seconds: number): string {
   const m = Math.floor(seconds / 60);
@@ -222,7 +223,7 @@ function App() {
 
   // Dismiss splash screen after a short delay to let the backend initialise
   useEffect(() => {
-    const id = setTimeout(() => setSplashVisible(false), 1200);
+    const id = setTimeout(() => setSplashVisible(false), SPLASH_DURATION_MS);
     return () => clearTimeout(id);
   }, []);
 
