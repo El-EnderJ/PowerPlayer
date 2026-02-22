@@ -74,6 +74,7 @@ function App() {
   const [activeView, setActiveView] = useState<PillTab>("library");
   const [libraryEmpty, setLibraryEmpty] = useState(false);
   const [showFullPlayer, setShowFullPlayer] = useState(false);
+  const [activeTrackPath, setActiveTrackPath] = useState<string | undefined>(undefined);
   const pendingVibeRef = useRef(false);
   const skipFrameRef = useRef(false);
   const amplitudeRef = useRef(0);
@@ -137,6 +138,7 @@ function App() {
 
       const track = await invokeSafe<TrackData>("load_track", { path: selected });
       const parsedLyrics = await invokeSafe<LyricsLine[]>("get_lyrics_lines");
+      setActiveTrackPath(selected);
       setTrackTitle(track.title || "Unknown Title");
       setTrackArtist(track.artist || "Unknown Artist");
       setDuration(track.duration_seconds || 0);
@@ -183,6 +185,7 @@ function App() {
       try {
         const track = await invokeSafe<TrackData>("load_track", { path });
         const parsedLyrics = await invokeSafe<LyricsLine[]>("get_lyrics_lines");
+        setActiveTrackPath(path);
         setTrackTitle(track.title || "Unknown Title");
         setTrackArtist(track.artist || "Unknown Artist");
         setDuration(track.duration_seconds || 0);
@@ -482,6 +485,7 @@ function App() {
             albumArt={albumArt}
             trackTitle={trackTitle}
             trackArtist={trackArtist}
+            activeTrackPath={activeTrackPath}
             isPlaying={isPlaying}
             currentTime={currentTime}
             duration={duration}

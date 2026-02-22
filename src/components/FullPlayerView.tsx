@@ -1,11 +1,13 @@
 import { memo, useMemo, useCallback, useRef, useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { Shuffle, Repeat, Timer, SkipBack, SkipForward } from "lucide-react";
+import { useAudioIPC } from "../hooks/useAudioIPC";
 
 interface FullPlayerViewProps {
   albumArt?: string;
   trackTitle: string;
   trackArtist: string;
+  activeTrackPath?: string;
   isPlaying: boolean;
   currentTime: number;
   duration: number;
@@ -48,6 +50,7 @@ function FullPlayerView({
   albumArt,
   trackTitle,
   trackArtist,
+  activeTrackPath,
   isPlaying,
   currentTime,
   duration,
@@ -57,10 +60,14 @@ function FullPlayerView({
   onSeek,
   onClose,
 }: FullPlayerViewProps) {
-  const waveform = useMemo(
+  const { invokeSafe } = useAudioIPC();
+  const fallbackWaveform = useMemo(
     () => generateWaveform(trackTitle + trackArtist, WAVEFORM_BARS),
     [trackTitle, trackArtist]
   );
+  const [waveformData, setWaveformData] = useState<number[] | null>(null);
+  const [isWaveformLoading, setIsWaveformLoading] = useState(false);
+  const waveform = waveformData && waveformData.length ? waveformData : fallbackWaveform;
   const progress = duration > 0 ? currentTime / duration : 0;
 
   // Local seek state for smooth interaction
@@ -82,6 +89,39 @@ function FullPlayerView({
     },
     []
   );
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!activeTrackPath) {
+      setWaveformData(null);
+      setIsWaveformLoading(false);
+      return;
+    }
+
+    setWaveformData(null);
+    setIsWaveformLoading(true);
+    void invokeSafe<number[]>("extract_waveform", { path: activeTrackPath, points: WAVEFORM_BARS })
+      .then((data) => {
+        if (!cancelled && Array.isArray(data) && data.length) {
+          // Defensive clamp in case stale/corrupt cache data falls outside normalized range.
+          setWaveformData(data.map((value) => Math.max(0, Math.min(1, Number(value) || 0))));
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          console.error(`Failed to extract waveform for "${activeTrackPath}"`, error);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsWaveformLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTrackPath, invokeSafe]);
 
   const displayProgress = localProgress ?? progress;
 
@@ -247,7 +287,7 @@ function FullPlayerView({
             {/* Waveform container */}
             <div
               ref={waveContainerRef}
-              className="flex h-12 flex-1 cursor-pointer items-end gap-[2px] rounded-xl"
+              className={`flex h-12 flex-1 cursor-pointer items-end gap-[2px] rounded-xl ${isWaveformLoading ? "animate-pulse" : ""}`}
               onMouseDown={handleWaveMouseDown}
               onKeyDown={handleWaveKeyDown}
               role="slider"

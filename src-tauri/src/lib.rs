@@ -238,6 +238,29 @@ async fn load_track(
 }
 
 #[tauri::command]
+async fn extract_waveform(
+    app: tauri::AppHandle,
+    path: String,
+    points: usize,
+) -> AppResult<Vec<f32>> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let db = app.state::<DbManager>();
+        if let Some(cached) = db.get_waveform_data(&path).map_err(AppError::db)? {
+            if cached.len() == points {
+                return Ok(cached);
+            }
+        }
+
+        let waveform = audio::analyzer::extract_waveform(Path::new(&path), points).map_err(AppError::dsp)?;
+        db.save_waveform_data(&path, &waveform)
+            .map_err(AppError::db)?;
+        Ok(waveform)
+    })
+    .await
+    .map_err(|err| AppError::dsp(format!("Blocking waveform extraction task failed: {err}")))?
+}
+
+#[tauri::command]
 fn get_lyrics_lines(state: tauri::State<'_, AudioState>) -> AppResult<Vec<LyricsLineData>> {
     Ok(state
         .get_lyrics_lines()
@@ -575,6 +598,7 @@ pub fn run() {
             get_eq_frequency_response,
             get_fft_data,
             load_track,
+            extract_waveform,
             play,
             pause,
             set_next_track,
