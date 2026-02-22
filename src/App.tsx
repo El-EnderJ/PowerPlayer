@@ -12,6 +12,7 @@ import LibraryView from "./components/LibraryView";
 import SearchView from "./components/SearchView";
 import SettingsView from "./components/SettingsView";
 import WelcomeView from "./components/WelcomeView";
+import SplashScreen from "./components/SplashScreen";
 import { useAudioIPC } from "./hooks/useAudioIPC";
 import { useTrackState } from "./hooks/useTrackState";
 
@@ -45,6 +46,7 @@ const VOLUME_SLIDER_DB_RANGE = 60;
 const VIBE_SKIP_THRESHOLD_MS = 8;
 const VIBE_CHANGE_THRESHOLD = 0.75;
 const MAX_SPECTRUM_SAMPLE_POINTS = 48;
+const SPLASH_DURATION_MS = 1200;
 
 function formatTimeApp(seconds: number): string {
   const m = Math.floor(seconds / 60);
@@ -82,6 +84,7 @@ function App() {
   const [showFullPlayer, setShowFullPlayer] = useState(false);
   const [fullPlayerLyricsRequested, setFullPlayerLyricsRequested] = useState(false);
   const [activeTrackPath, setActiveTrackPath] = useState<string | undefined>(undefined);
+  const [splashVisible, setSplashVisible] = useState(true);
   const pendingVibeRef = useRef(false);
   const skipFrameRef = useRef(false);
   const amplitudeRef = useRef(0);
@@ -217,6 +220,37 @@ function App() {
         setLibraryEmpty(true);
       });
   }, [invokeSafe]);
+
+  // Dismiss splash screen after a short delay to let the backend initialise
+  useEffect(() => {
+    const id = setTimeout(() => setSplashVisible(false), SPLASH_DURATION_MS);
+    return () => clearTimeout(id);
+  }, []);
+
+  // Global keyboard shortcuts
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      // Ignore when typing in an input or textarea
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+
+      if (e.key === " ") {
+        e.preventDefault();
+        handlePlayPause();
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        handleSkipForward();
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        handleSkipBack();
+      } else if (e.key === "Escape" && showFullPlayer) {
+        e.preventDefault();
+        setShowFullPlayer(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [handlePlayPause, handleSkipForward, handleSkipBack, showFullPlayer]);
 
   // Select folder and scan library (Tauri integration)
   const handleSelectLibrary = useCallback(async () => {
@@ -527,6 +561,8 @@ function App() {
           {fps} FPS
         </div>
       ) : null}
+
+      <SplashScreen visible={splashVisible} />
     </div>
   );
 }
