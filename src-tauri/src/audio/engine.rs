@@ -775,6 +775,14 @@ impl AudioState {
 impl Drop for AudioState {
     fn drop(&mut self) {
         self.inner.should_stop.store(true, Ordering::SeqCst);
+        // Release the WASAPI / cpal stream first so the audio device is freed
+        // before we block on worker threads, allowing other apps to use audio.
+        #[cfg(target_os = "windows")]
+        {
+            if let Ok(mut stream) = self.inner.stream.lock() {
+                drop(stream.take());
+            }
+        }
         if let Ok(mut handle) = self.inner.decoder_thread.lock() {
             if let Some(join_handle) = handle.take() {
                 let _ = join_handle.join();
