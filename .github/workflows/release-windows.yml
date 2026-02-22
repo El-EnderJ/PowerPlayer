@@ -1,0 +1,40 @@
+name: "Publish Windows Release"
+
+on:
+  push:
+    tags:
+      - 'v*' # Se activa cuando creas un tag como v1.0.0
+
+jobs:
+  publish-windows:
+    permissions:
+      contents: write
+    runs-on: windows-latest # Solo usamos servidores de Windows
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: Build and Release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }} # Usa el nombre del tag (v1.0.0)
+          releaseName: "PowerPlayer ${{ github.ref_name }}"
+          releaseBody: "Nueva versión de PowerPlayer para Windows."
+          releaseDraft: false
+          releasePrerelease: false
+          
