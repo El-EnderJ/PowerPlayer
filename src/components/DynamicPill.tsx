@@ -196,7 +196,7 @@ function DynamicPill({
                     exit={{ opacity: 0, scaleY: 0 }}
                     transition={{ type: "spring", stiffness: 400, damping: 25 }}
                     style={{ originY: 1, transformOrigin: "bottom" }}
-                    className="liquid-glass absolute bottom-[120%] left-1/2 -translate-x-1/2 w-48 rounded-xl overflow-hidden"
+                    className="liquid-glass absolute bottom-[120%] right-0 w-48 rounded-xl overflow-hidden"
                   >
                     <button
                       type="button"
